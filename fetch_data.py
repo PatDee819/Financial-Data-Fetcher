@@ -1,8 +1,6 @@
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
-import base64
-import os
 
 def fetch_financial_data(ticker, period="5d"):
     try:
@@ -20,6 +18,30 @@ def fetch_financial_data(ticker, period="5d"):
         print(f"Error for {ticker}: {e}")
         return None, None
 
+def calculate_composite_score(results):
+    try:
+        vix_level = results.get("VIX_Current")
+        vix_momentum = results.get("VIX_Momentum")
+        gvz_level = results.get("GVZ_Current")
+        gvz_momentum = results.get("GVZ_Momentum")
+        dxy_level = results.get("DXY_Current")
+        dxy_momentum = results.get("DXY_Momentum")
+        if None in [vix_level, vix_momentum, gvz_level, gvz_momentum, dxy_level, dxy_momentum]:
+            print("Cannot calculate Composite Score: Missing data")
+            return None
+        composite_score = (
+            (vix_level * 0.35) +
+            (vix_momentum * 0.25) +
+            (gvz_level * 0.20) +
+            (gvz_momentum * 0.10) +
+            (dxy_level * 0.05) +
+            (dxy_momentum * 0.05)
+        )
+        return composite_score
+    except Exception as e:
+        print(f"Error calculating Composite Score: {e}")
+        return None
+
 if __name__ == "__main__":
     tickers = {"VIX": "^VIX", "GVZ": "^GVZ", "DXY": "DX-Y.NYB"}
     momentum_period = "5d"
@@ -30,7 +52,9 @@ if __name__ == "__main__":
         results[f"{key}_Current"] = current
         results[f"{key}_Momentum"] = momentum
 
-    # Save to CSV in repo (via env var for GitHub token if needed)
+    composite_score = calculate_composite_score(results)
+    results["Composite_Score"] = composite_score
+
     timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M')
     filename = f"financial_data_{timestamp}.csv"
     df = pd.DataFrame([results])
@@ -42,6 +66,8 @@ if __name__ == "__main__":
         if value is not None:
             if "Momentum" in key:
                 print(f"{key}: {value:.2f}%")
+            elif key == "Composite_Score":
+                print(f"{key}: {value:.2f}")
             else:
                 print(f"{key}: {value:.2f}")
         else:
