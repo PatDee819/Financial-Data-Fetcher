@@ -2,35 +2,38 @@ name: Fetch Financial Data
 
 permissions:
   contents: write
-  
+
 on:
   schedule:
-    - cron: '*/30 * * * *'  # Every 30 minutes
-  workflow_dispatch:  # Manual trigger
+    - cron: '*/30 * * * *'  # Runs every 30 minutes
+  workflow_dispatch:  # Allows manual triggering
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.12'
+        python-version: '3.12'  # Keep your specific version
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-    - name: Run script
+    - name: Run fetch_data.py
       run: python fetch_data.py
-    - name: Commit CSV if changed
+    - name: Commit and push CSV files
       run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
         git add financial_data_*.csv
         if git diff --staged --quiet; then
-          echo "No changes"
+          echo "No changes to commit"
         else
-          git commit -m "Add new financial data CSV"
+          git commit -m "Add financial data CSV for $(date +'%Y-%m-%d %H:%M:%S')"
           git push
         fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
