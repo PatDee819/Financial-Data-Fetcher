@@ -11,13 +11,11 @@ def fetch_financial_data(ticker, period="2d", interval="1h"):
             print(f"Insufficient data for {ticker}: {len(hist_data)} hours")
             return None, None, None
         current_price = hist_data["Close"].iloc[-1]
-        # 5-hour momentum
         initial_price = hist_data["Close"].iloc[-5]
         momentum = ((current_price - initial_price) / initial_price) * 100 if initial_price != 0 else None
         print(f"{ticker}: {len(hist_data)} hours available, momentum period: 5-hour, momentum: {momentum:.2f}%")
-        # Volatility: annualized std dev of hourly returns
         returns = hist_data["Close"].pct_change().dropna()
-        if len(returns) < 10 or any(abs(r) > 0.1 for r in returns):
+        if len(returns) < 8 or any(abs(r) > 0.2 for r in returns):  # Relaxed validation
             print(f"Unreliable data for {ticker}: {len(returns)} returns or extreme values")
             return None, None, None
         volatility = returns.std() * np.sqrt(252) * 100 if len(returns) > 1 else None
@@ -40,14 +38,13 @@ def normalize_value(value, min_val, max_val):
 
 def calculate_composite_score(results):
     try:
-        # Input values with normalization ranges and weights
         inputs = {
             "VIX_Level": (results.get("VIX_Current"), 10, 50, 0.10),
             "VIX_Momentum": (results.get("VIX_Momentum"), -10, 10, 0.05),
-            "VIX_Volatility": (results.get("VIX_Volatility"), 0, 30, 0.05),
+            "VIX_Volatility": (results.get("VIX_Volatility"), 0, 40, 0.05),  # Wider range
             "GVZ_Level": (results.get("GVZ_Current"), 10, 40, 0.15),
             "GVZ_Momentum": (results.get("GVZ_Momentum"), -10, 10, 0.10),
-            "GVZ_Volatility": (results.get("GVZ_Volatility"), 0, 30, 0.05),
+            "GVZ_Volatility": (results.get("GVZ_Volatility"), 0, 40, 0.05),  # Wider range
             "DXY_Level": (results.get("DXY_Current"), 80, 120, 0.10),
             "DXY_Momentum": (results.get("DXY_Momentum"), -5, 5, 0.05),
             "DXY_Volatility": (results.get("DXY_Volatility"), 0, 30, 0.05),
