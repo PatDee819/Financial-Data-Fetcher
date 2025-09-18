@@ -17,6 +17,9 @@ def fetch_financial_data(ticker, period="2d", interval="1h"):
         print(f"{ticker}: {len(hist_data)} hours available, momentum period: 5-hour, momentum: {momentum:.2f}%")
         # Volatility: annualized std dev of hourly returns
         returns = hist_data["Close"].pct_change().dropna()
+        if len(returns) < 10 or any(abs(r) > 0.1 for r in returns):
+            print(f"Unreliable data for {ticker}: {len(returns)} returns or extreme values")
+            return None, None, None
         volatility = returns.std() * np.sqrt(252) * 100 if len(returns) > 1 else None
         print(f"{ticker}: Volatility: {volatility:.2f}%")
         return current_price, momentum, volatility
@@ -41,16 +44,16 @@ def calculate_composite_score(results):
         inputs = {
             "VIX_Level": (results.get("VIX_Current"), 10, 50, 0.10),
             "VIX_Momentum": (results.get("VIX_Momentum"), -10, 10, 0.05),
-            "VIX_Volatility": (results.get("VIX_Volatility"), 1, 25, 0.05),
+            "VIX_Volatility": (results.get("VIX_Volatility"), 0, 30, 0.05),
             "GVZ_Level": (results.get("GVZ_Current"), 10, 40, 0.15),
             "GVZ_Momentum": (results.get("GVZ_Momentum"), -10, 10, 0.10),
-            "GVZ_Volatility": (results.get("GVZ_Volatility"), 1, 25, 0.05),
+            "GVZ_Volatility": (results.get("GVZ_Volatility"), 0, 30, 0.05),
             "DXY_Level": (results.get("DXY_Current"), 80, 120, 0.10),
             "DXY_Momentum": (results.get("DXY_Momentum"), -5, 5, 0.05),
-            "DXY_Volatility": (results.get("DXY_Volatility"), 1, 25, 0.05),
+            "DXY_Volatility": (results.get("DXY_Volatility"), 0, 30, 0.05),
             "GOLD_Level": (results.get("GOLD_Current"), 2000, 4000, 0.10),
             "GOLD_Momentum": (results.get("GOLD_Momentum"), -3, 3, 0.20),
-            "GOLD_Volatility": (results.get("GOLD_Volatility"), 1, 20, 0.05),
+            "GOLD_Volatility": (results.get("GOLD_Volatility"), 0, 25, 0.05),
         }
         if None in [v[0] for v in inputs.values()]:
             print("Cannot calculate Composite Score: Missing data")
