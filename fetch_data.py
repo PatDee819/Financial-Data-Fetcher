@@ -40,21 +40,27 @@ def calculate_composite_score(results):
         # Input values with normalization ranges and weights
         inputs = {
             "VIX_Level": (results.get("VIX_Current"), 10, 50, 0.10),
-            "VIX_Momentum": (results.get("VIX_Momentum"), -5, 5, 0.05),
-            "VIX_Volatility": (results.get("VIX_Volatility"), 2, 20, 0.05),
+            "VIX_Momentum": (results.get("VIX_Momentum"), -10, 10, 0.05),
+            "VIX_Volatility": (results.get("VIX_Volatility"), 1, 25, 0.05),
             "GVZ_Level": (results.get("GVZ_Current"), 10, 40, 0.15),
-            "GVZ_Momentum": (results.get("GVZ_Momentum"), -5, 5, 0.10),
-            "GVZ_Volatility": (results.get("GVZ_Volatility"), 2, 20, 0.05),
+            "GVZ_Momentum": (results.get("GVZ_Momentum"), -10, 10, 0.10),
+            "GVZ_Volatility": (results.get("GVZ_Volatility"), 1, 25, 0.05),
             "DXY_Level": (results.get("DXY_Current"), 80, 120, 0.10),
             "DXY_Momentum": (results.get("DXY_Momentum"), -5, 5, 0.05),
-            "DXY_Volatility": (results.get("DXY_Volatility"), 2, 20, 0.05),
+            "DXY_Volatility": (results.get("DXY_Volatility"), 1, 25, 0.05),
             "GOLD_Level": (results.get("GOLD_Current"), 2000, 4000, 0.10),
             "GOLD_Momentum": (results.get("GOLD_Momentum"), -3, 3, 0.20),
-            "GOLD_Volatility": (results.get("GOLD_Volatility"), 2, 20, 0.05),
+            "GOLD_Volatility": (results.get("GOLD_Volatility"), 1, 20, 0.05),
         }
         if None in [v[0] for v in inputs.values()]:
             print("Cannot calculate Composite Score: Missing data")
             return None
+        # Log normalized values for debugging
+        normalized_values = {}
+        for name, (value, min_val, max_val, weight) in inputs.items():
+            normalized = normalize_value(value, min_val, max_val)
+            normalized_values[name] = normalized
+            print(f"{name}: Raw={value:.2f}, Normalized={normalized:.2f}")
         # Compute weighted sum of normalized values
         composite_score = sum(
             normalize_value(value, min_val, max_val) * weight
