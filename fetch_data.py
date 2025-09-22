@@ -2,28 +2,36 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import time
 
-def fetch_financial_data(ticker, period="2d", interval="1h"):
-    try:
-        asset = yf.Ticker(ticker)
-        hist_data = asset.history(period=period, interval=interval)
-        if hist_data.empty or len(hist_data) < 5:
-            print(f"Insufficient data for {ticker}: {len(hist_data)} hours")
-            return None, None, None
-        current_price = hist_data["Close"].iloc[-1]
-        initial_price = hist_data["Close"].iloc[-5]
-        momentum = ((current_price - initial_price) / initial_price) * 100 if initial_price != 0 else None
-        print(f"{ticker}: {len(hist_data)} hours available, momentum period: 5-hour, momentum: {momentum:.2f}%")
-        returns = hist_data["Close"].pct_change().dropna()
-        if len(returns) < 8 or any(abs(r) > 0.2 for r in returns):  # Relaxed validation
-            print(f"Unreliable data for {ticker}: {len(returns)} returns or extreme values")
-            return None, None, None
-        volatility = returns.std() * np.sqrt(252) * 100 if len(returns) > 1 else None
-        print(f"{ticker}: Volatility: {volatility:.2f}%")
-        return current_price, momentum, volatility
-    except Exception as e:
-        print(f"Error fetching {ticker}: {e}")
-        return None, None, None
+def fetch_financial_data(ticker, period="5d", interval="1h", retries=3):
+    for attempt in range(retries):
+        try:
+            asset = yf.Ticker(ticker)
+            hist_data = asset.history(period=period, interval=interval)
+            if hist_data.empty or len(hist_data) < 5:
+                print(f"Insufficient data for {ticker}: {len(hist_data)} hours")
+                return None, None, None
+            current_price = hist_data["Close"].iloc[-1]
+            initial_price = hist_data["Close"].iloc[-5]
+            momentum = ((current_price - initial_price) / initial_price) * 100 if initial_price != 0 else None
+            print(f"{ticker}: {len(hist_data)} hours available, momentum period: 5-hour, momentum: {momentum:.2f}%")
+            returns = hist_data["Close"].pct_change().dropna()
+            if len(returns) < 5 or any(abs(r) > 0.2 for r in returns):
+                print(f"Unreliable data for {ticker}: {len(returns)} returns or extreme values")
+                return None, None, None
+            volatility = returns.std() * np.sqrt(252 * 6.5) * 100 if len(returns) > 1 else None  # Adjusted for hourly data (approx. trading hours/year)
+            print(f"{ticker}: Volatility: {volatility:.2f}%")
+            return current_price, momentum, volatility
+        except yf.utils.YFRateLimitError as e:
+            wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s, etc.
+            print(f"Rate limit hit for {ticker}: {e}. Retrying after {wait_time} seconds...")
+            time.sleep(wait_time)
+        except Exception as e:
+            print(f"Error fetching {ticker} (attempt {attempt+1}/{retries}): {e}")
+            time.sleep(1)  # Short sleep on general errors
+    print(f"Failed to fetch {ticker} after {retries} attempts.")
+    return None, None, None
 
 def normalize_value(value, min_val, max_val):
     """Normalize to 0-100 scale, clamping to avoid outliers."""
@@ -41,10 +49,10 @@ def calculate_composite_score(results):
         inputs = {
             "VIX_Level": (results.get("VIX_Current"), 10, 50, 0.10),
             "VIX_Momentum": (results.get("VIX_Momentum"), -10, 10, 0.05),
-            "VIX_Volatility": (results.get("VIX_Volatility"), 0, 40, 0.05),  # Wider range
+            "VIX_Volatility": (results.get("VIX_Volatility"), 0, 40, 0.05),
             "GVZ_Level": (results.get("GVZ_Current"), 10, 40, 0.15),
             "GVZ_Momentum": (results.get("GVZ_Momentum"), -10, 10, 0.10),
-            "GVZ_Volatility": (results.get("GVZ_Volatility"), 0, 40, 0.05),  # Wider range
+            "GVZ_Volatility": (results.get("GVZ_Volatility"), 0, 40, 0.05),
             "DXY_Level": (results.get("DXY_Current"), 80, 120, 0.10),
             "DXY_Momentum": (results.get("DXY_Momentum"), -5, 5, 0.05),
             "DXY_Volatility": (results.get("DXY_Volatility"), 0, 30, 0.05),
@@ -52,14 +60,13 @@ def calculate_composite_score(results):
             "GOLD_Momentum": (results.get("GOLD_Momentum"), -3, 3, 0.20),
             "GOLD_Volatility": (results.get("GOLD_Volatility"), 0, 25, 0.05),
         }
-        if None in [v[0] for v in inputs.values()]:
-            print("Cannot calculate Composite Score: Missing data")
+        missing = [k for k, v in inputs.items() if v[0] is None]
+        if missing:
+            print(f"Cannot calculate Composite Score: Missing data for {', '.join(missing)}")
             return None
         # Log normalized values for debugging
-        normalized_values = {}
         for name, (value, min_val, max_val, weight) in inputs.items():
             normalized = normalize_value(value, min_val, max_val)
-            normalized_values[name] = normalized
             print(f"{name}: Raw={value:.2f}, Normalized={normalized:.2f}")
         # Compute weighted sum of normalized values
         composite_score = sum(
@@ -75,13 +82,13 @@ if __name__ == "__main__":
     # Tickers for yFinance
     tickers = {"VIX": "^VIX", "GVZ": "^GVZ", "DXY": "DX-Y.NYB", "GOLD": "GC=F"}
     results = {}
-
-    # Fetch data for each ticker
+    # Fetch data for each ticker with delay to avoid rate limits
     for key, ticker in tickers.items():
         current, momentum, volatility = fetch_financial_data(ticker)
         results[f"{key}_Current"] = current
         results[f"{key}_Momentum"] = momentum
         results[f"{key}_Volatility"] = volatility
+        time.sleep(1)  # Short delay between tickers
 
     # Calculate composite score
     composite_score = calculate_composite_score(results)
