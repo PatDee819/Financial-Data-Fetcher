@@ -20,16 +20,16 @@ def fetch_financial_data(ticker, period="5d", interval="1h", retries=3):
             if len(returns) < 5 or any(abs(r) > 0.2 for r in returns):
                 print(f"Unreliable data for {ticker}: {len(returns)} returns or extreme values")
                 return None, None, None
-            volatility = returns.std() * np.sqrt(252 * 6.5) * 100 if len(returns) > 1 else None  # Adjusted for hourly data (approx. trading hours/year)
+            volatility = returns.std() * np.sqrt(252 * 6.5) * 100 if len(returns) > 1 else None
             print(f"{ticker}: Volatility: {volatility:.2f}%")
             return current_price, momentum, volatility
         except yf.utils.YFRateLimitError as e:
-            wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s, etc.
+            wait_time = 2 ** attempt
             print(f"Rate limit hit for {ticker}: {e}. Retrying after {wait_time} seconds...")
             time.sleep(wait_time)
         except Exception as e:
             print(f"Error fetching {ticker} (attempt {attempt+1}/{retries}): {e}")
-            time.sleep(1)  # Short sleep on general errors
+            time.sleep(1)
     print(f"Failed to fetch {ticker} after {retries} attempts.")
     return None, None, None
 
@@ -64,11 +64,9 @@ def calculate_composite_score(results):
         if missing:
             print(f"Cannot calculate Composite Score: Missing data for {', '.join(missing)}")
             return None
-        # Log normalized values for debugging
         for name, (value, min_val, max_val, weight) in inputs.items():
             normalized = normalize_value(value, min_val, max_val)
             print(f"{name}: Raw={value:.2f}, Normalized={normalized:.2f}")
-        # Compute weighted sum of normalized values
         composite_score = sum(
             normalize_value(value, min_val, max_val) * weight
             for name, (value, min_val, max_val, weight) in inputs.items()
@@ -79,24 +77,20 @@ def calculate_composite_score(results):
         return None
 
 if __name__ == "__main__":
-    # Tickers for yFinance
     tickers = {"VIX": "^VIX", "GVZ": "^GVZ", "DXY": "DX-Y.NYB", "GOLD": "GC=F"}
     results = {}
-    # Fetch data for each ticker with delay to avoid rate limits
     for key, ticker in tickers.items():
         current, momentum, volatility = fetch_financial_data(ticker)
         results[f"{key}_Current"] = current
         results[f"{key}_Momentum"] = momentum
         results[f"{key}_Volatility"] = volatility
-        time.sleep(1)  # Short delay between tickers
+        time.sleep(1)
 
-    # Calculate composite score
     composite_score = calculate_composite_score(results)
     results["Composite_Score"] = composite_score
 
-    # Save to CSV
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M')
-    filename = f"financial_data_{timestamp}.csv"
+    # Save to fixed CSV for MT4 EA
+    filename = "scores.csv"  # Changed from timestamped name
     df = pd.DataFrame([results])
     df.to_csv(filename, index=False)
 
