@@ -5,8 +5,8 @@ permissions:
 
 on:
   schedule:
-    - cron: '*/30 * * * *'  # Runs every 30 minutes
-  workflow_dispatch:  # Allows manual triggering
+    - cron: '*/30 * * * *'  # Every 30 minutes
+  workflow_dispatch:  # Manual trigger
 
 jobs:
   fetch:
@@ -17,18 +17,18 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.12'  # Keep your specific version
+        python-version: '3.12'
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
     - name: Run fetch_data.py
       run: python fetch_data.py
-    - name: Commit and push CSV files
+    - name: Commit and push CSV
       run: |
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git add financial_data_*.csv
+        git add scores.csv
         if git diff --staged --quiet; then
           echo "No changes to commit"
         else
