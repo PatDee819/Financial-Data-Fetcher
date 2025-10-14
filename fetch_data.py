@@ -107,3 +107,5 @@ if __name__ == "__main__":
                 print(f"{key}: {value:.2f}")
         else:
             print(f"{key}: Data not available")
+</parameter
+</xai:function_call
