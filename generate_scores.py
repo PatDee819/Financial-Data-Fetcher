@@ -61,14 +61,14 @@ def calculate_composite_score(results):
             "GOLD_Volatility": (results.get("GOLD_Volatility"), 0, 25, 0.05),
         }
         missing = [k for k, v in inputs.items() if v[0] is None]
-        if missing:
-            print(f"Cannot calculate Composite Score: Missing data for {', '.join(missing)}")
+        if len(missing) > 2:
+            print(f"Cannot calculate Composite Score: Too many missing data for {', '.join(missing)}")
             return None
         for name, (value, min_val, max_val, weight) in inputs.items():
             normalized = normalize_value(value, min_val, max_val)
             print(f"{name}: Raw={value:.2f}, Normalized={normalized:.2f}")
         composite_score = sum(
-            normalize_value(value, min_val, max_val) * weight
+            normalize_value(value, min_val, max_val) * weight if value is not None else 0
             for name, (value, min_val, max_val, weight) in inputs.items()
         )
         return composite_score
@@ -81,24 +81,27 @@ if __name__ == "__main__":
     results = {}
     for key, ticker in tickers.items():
         current, momentum, volatility = fetch_financial_data(ticker)
+        # Fallback to GLD if GC=F fails
+        if key == "GOLD" and current is None:
+            current, momentum, volatility = fetch_financial_data("GLD")
         results[f"{key}_Current"] = current
         results[f"{key}_Momentum"] = momentum
         results[f"{key}_Volatility"] = volatility
         time.sleep(1)
 
     composite_score = calculate_composite_score(results)
-    results["Composite_Score"] = composite_score
+    results["Composite_Score"] = composite_score if composite_score is not None else 0
 
-    # Save to fixed CSV for MT4 EA
-    filename = "scores.csv"  # Changed from timestamped name
+    filename = "scores.csv"
+    for key in results:
+        if results[key] is None:
+            results[key] = np.nan
     df = pd.DataFrame([results])
-    df.to_csv(filename, index=False)
-
-    # Print results
+    df.to_csv(filename, index=False, header=True, na_rep='')
     print(f"Data saved to {filename}")
     print(f"Fetched at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     for key, value in results.items():
-        if value is not None:
+        if pd.notna(value):
             if "Momentum" in key or "Volatility" in key:
                 print(f"{key}: {value:.2f}%")
             elif key == "Composite_Score":
@@ -107,5 +110,3 @@ if __name__ == "__main__":
                 print(f"{key}: {value:.2f}")
         else:
             print(f"{key}: Data not available")
-</parameter
-</xai:function_call
