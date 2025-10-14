@@ -34,7 +34,6 @@ def fetch_financial_data(ticker, period="5d", interval="1h", retries=3):
     return None, None, None
 
 def normalize_value(value, min_val, max_val):
-    """Normalize to 0-100 scale, clamping to avoid outliers."""
     if value is None or min_val is None or max_val is None:
         return None
     try:
@@ -81,7 +80,6 @@ if __name__ == "__main__":
     results = {}
     for key, ticker in tickers.items():
         current, momentum, volatility = fetch_financial_data(ticker)
-        # Fallback to GLD if GC=F fails
         if key == "GOLD" and current is None:
             current, momentum, volatility = fetch_financial_data("GLD")
         results[f"{key}_Current"] = current
