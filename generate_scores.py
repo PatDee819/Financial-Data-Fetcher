@@ -92,7 +92,7 @@ if __name__ == "__main__":
         results[f"{key}_Current"] = current
         results[f"{key}_Momentum"] = momentum
         results[f"{key}_Volatility"] = volatility
-        time.sleep(5)  # Increased to avoid rate limits
+        time.sleep(5)
 
     composite_score = calculate_composite_score(results)
     results["Composite_Score"] = composite_score
