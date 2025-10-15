@@ -8,13 +8,13 @@ on:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    permissions:  # Grant write access to repository contents
+    permissions:
       contents: write
 
     steps:
     - uses: actions/checkout@v4
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}  # Use default token explicitly
+        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Set up Python
       uses: actions/setup-python@v5
