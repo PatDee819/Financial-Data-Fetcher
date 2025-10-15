@@ -10,15 +10,18 @@ def fetch_financial_data(ticker, period="5d", interval="1h", retries=3):
             asset = yf.Ticker(ticker)
             hist_data = asset.history(period=period, interval=interval)
             if hist_data.empty or len(hist_data) < 5:
-                print(f"Insufficient data for {ticker}: {len(hist_data)} hours")
+                print(f"Insufficient data for {ticker}: {len(hist_data)} hours, Data: {hist_data}")
                 return None, None, None
             current_price = hist_data["Close"].iloc[-1]
             initial_price = hist_data["Close"].iloc[-5]
             momentum = ((current_price - initial_price) / initial_price) * 100 if initial_price != 0 else None
             print(f"{ticker}: {len(hist_data)} hours available, momentum period: 5-hour, momentum: {momentum:.2f}%")
             returns = hist_data["Close"].pct_change().dropna()
-            if len(returns) < 5 or any(abs(r) > 0.2 for r in returns):
-                print(f"Unreliable data for {ticker}: {len(returns)} returns or extreme values")
+            if len(returns) < 5:
+                print(f"Unreliable data for {ticker}: Only {len(returns)} returns available")
+                return None, None, None
+            if any(abs(r) > 0.5 for r in returns):
+                print(f"Unreliable data for {ticker}: Extreme returns detected {returns}")
                 return None, None, None
             volatility = returns.std() * np.sqrt(252 * 6.5) * 100 if len(returns) > 1 else None
             print(f"{ticker}: Volatility: {volatility:.2f}%")
@@ -28,7 +31,7 @@ def fetch_financial_data(ticker, period="5d", interval="1h", retries=3):
             print(f"Rate limit hit for {ticker}: {e}. Retrying after {wait_time} seconds...")
             time.sleep(wait_time)
         except Exception as e:
-            print(f"Error fetching {ticker} (attempt {attempt+1}/{retries}): {e}")
+            print(f"Error fetching {ticker} (attempt {attempt+1}/{retries}): {e}, Type: {type(e).__name__}")
             time.sleep(1)
     print(f"Failed to fetch {ticker} after {retries} attempts.")
     return None, None, None
@@ -60,7 +63,7 @@ def calculate_composite_score(results):
             "GOLD_Volatility": (results.get("GOLD_Volatility"), 0, 25, 0.05),
         }
         missing = [k for k, v in inputs.items() if v[0] is None]
-        if len(missing) > 2:
+        if len(missing) > 4:
             print(f"Cannot calculate Composite Score: Too many missing data for {', '.join(missing)}")
             return None
         for name, (value, min_val, max_val, weight) in inputs.items():
@@ -80,15 +83,19 @@ if __name__ == "__main__":
     results = {}
     for key, ticker in tickers.items():
         current, momentum, volatility = fetch_financial_data(ticker)
+        if key == "VIX" and current is None:
+            print(f"Retrying VIX with fallback ticker VXX")
+            current, momentum, volatility = fetch_financial_data("VXX")
         if key == "GOLD" and current is None:
+            print(f"Retrying GOLD with fallback ticker GLD")
             current, momentum, volatility = fetch_financial_data("GLD")
         results[f"{key}_Current"] = current
         results[f"{key}_Momentum"] = momentum
         results[f"{key}_Volatility"] = volatility
-        time.sleep(1)
+        time.sleep(5)  # Increased to avoid rate limits
 
     composite_score = calculate_composite_score(results)
-    results["Composite_Score"] = composite_score if composite_score is not None else 0
+    results["Composite_Score"] = composite_score
 
     filename = "scores.csv"
     for key in results:
