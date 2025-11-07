@@ -5,7 +5,16 @@ from datetime import datetime
 import time
 import requests
 from io import StringIO
-import os
+import base64
+import json
+
+# ==============================
+# GITHUB CONFIG (EDIT THESE)
+# ==============================
+GITHUB_TOKEN = "YOUR_GITHUB_TOKEN_HERE"  # See Step 2 below
+REPO_OWNER = "PatDee819"
+REPO_NAME = "Financial-Data-Fetcher"
+BRANCH = "main"
 
 # ==============================
 # 1. FETCH & COMPOSITE (UNCHANGED)
@@ -52,7 +61,32 @@ def calculate_composite_score(results):
     return round(score, 2)
 
 # ==============================
-# 2. MAIN: OUTPUT 2 FILES
+# 2. UPLOAD TO GITHUB VIA API
+# ==============================
+def upload_file_to_github(file_path, file_content, commit_message):
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    # Get current file SHA (for updates)
+    response = requests.get(url, headers=headers)
+    sha = response.json().get("sha") if response.status_code == 200 else None
+    
+    data = {
+        "message": commit_message,
+        "content": base64.b64encode(file_content.encode("utf-8")).decode("utf-8"),
+        "branch": BRANCH
+    }
+    if sha:
+        data["sha"] = sha
+    
+    response = requests.put(url, headers=headers, data=json.dumps(data))
+    return response.status_code == 200
+
+# ==============================
+# 3. MAIN: GENERATE & UPLOAD
 # ==============================
 def main():
     tickers = {"VIX": "^VIX", "GVZ": "^GVZ", "DXY": "DX-Y.NYB", "GOLD": "GC=F"}
@@ -72,7 +106,7 @@ def main():
     results["Composite_Score"] = composite
 
     # ==============================
-    # 3. OUTPUT 1: scores.csv (LEGACY — UNCHANGED)
+    # 4. GENERATE LEGACY scores.csv
     # ==============================
     df_legacy = pd.DataFrame([results])
     df_legacy = df_legacy[[
@@ -82,33 +116,32 @@ def main():
         'GOLD_Current','GOLD_Momentum','GOLD_Volatility',
         'Composite_Score'
     ]]
-    df_legacy.to_csv("scores.csv", index=False, header=True, na_rep='')
-    print(f"LEGACY scores.csv → Updated")
+    scores_content = df_legacy.to_csv(index=False, header=True, na_rep='')
+
+    # Upload scores.csv
+    if upload_file_to_github("scores.csv", scores_content, f"Update scores.csv - {datetime.now().strftime('%Y-%m-%d %H:%M:%S') }"):
+        print("scores.csv → Uploaded to GitHub")
 
     # ==============================
-    # 4. OUTPUT 2: bias_signal.csv (NEW PREDICTIVE BIAS)
+    # 5. GENERATE NEW bias_signal.csv
     # ==============================
     signal = generate_predictive_bias(results, composite)
     signal_df = pd.DataFrame([signal])
-    signal_df.to_csv("bias_signal.csv", index=False)
-    print(f"NEW bias_signal.csv → {signal['action']} | {signal['bias']} | {signal['strength']:+.1f}")
-
-    # ==============================
-    # 5. UPLOAD TO GITHUB (AUTO)
-    # ==============================
-    upload_to_github()
+    bias_content = signal_df.to_csv(index=False)
+    
+    # Upload bias_signal.csv
+    if upload_file_to_github("bias_signal.csv", bias_content, f"Update bias_signal.csv - {datetime.now().strftime('%Y-%m-%d %H:%M:%S') }"):
+        print(f"bias_signal.csv → Uploaded | Action: {signal['action']} | Bias: {signal['bias']} | Strength: {signal['strength']:+.1f}")
 
 # ==============================
-# 6. PREDICTIVE BIAS ENGINE (NO ML — PURE LOGIC, INSTANT)
+# 6. PREDICTIVE BIAS (SAME AS BEFORE)
 # ==============================
 def generate_predictive_bias(results, current_score):
     try:
-        # Pull last 12 scores from GitHub
-        url = "https://raw.githubusercontent.com/PatDee819/Financial-Data-Fetcher/main/scores.csv"
+        url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/scores.csv"
         hist = pd.read_csv(StringIO(requests.get(url, timeout=10).text))
         scores = hist['Composite_Score'].dropna().tail(12).tolist()
 
-        # 3-vs-3 slope (your old logic)
         if len(scores) >= 6:
             recent = np.mean(scores[-3:])
             prior = np.mean(scores[-6:-3])
@@ -116,25 +149,18 @@ def generate_predictive_bias(results, current_score):
         else:
             slope = 0
 
-        # Predictive Boosters
         vix_mom = results.get("VIX_Momentum", 0)
         gvz_mom = results.get("GVZ_Momentum", 0)
         dxy_mom = results.get("DXY_Momentum", 0)
         gold_mom = results.get("GOLD_Momentum", 0)
 
-        # Rule 1: GVZ up + VIX down → Gold bullish
         boost1 = 3.0 if gvz_mom > 1.5 and vix_mom < -1 else 0
-
-        # Rule 2: DXY down + Gold vol low → Gold strength
         boost2 = 2.5 if dxy_mom < -0.5 and results.get("GOLD_Volatility", 100) < 15 else 0
-
-        # Rule 3: Score accelerating
         boost3 = 1.5 if len(scores) >= 3 and (scores[-1] - scores[-2]) > (scores[-2] - scores[-3]) else 0
 
         projected = current_score + slope * 2.0 + boost1 + boost2 + boost3
         bias = projected - current_score
 
-        # Final Action
         if bias > 6:
             action = "LONG"
         elif bias < -6:
@@ -156,18 +182,6 @@ def generate_predictive_bias(results, current_score):
             "bias": "NEUTRAL", "strength": 0.0, "confidence": 0,
             "action": "FLAT", "projected_move_pct": 0.0
         }
-
-# ==============================
-# 7. AUTO UPLOAD TO GITHUB
-# ==============================
-def upload_to_github():
-    try:
-        os.system('git add scores.csv bias_signal.csv')
-        os.system('git commit -m "auto update $(date)"')
-        os.system('git push')
-        print("Pushed to GitHub")
-    except:
-        print("Git push failed — run manually")
 
 # ==============================
 # RUN
