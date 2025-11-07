@@ -7,11 +7,14 @@ import requests
 from io import StringIO
 import base64
 import json
+import os # NEW IMPORT
 
 # ==============================
 # GITHUB CONFIG (EDIT THESE)
 # ==============================
-GITHUB_TOKEN = "YOUR_GITHUB_TOKEN_HERE"  # See Step 2 below
+# 🛑 CRITICAL CHANGE: Token is now read from an environment variable (GH_TOKEN)
+# This variable will be set securely by GitHub Actions and is NOT visible in the code.
+GITHUB_TOKEN = os.getenv("GH_TOKEN") 
 REPO_OWNER = "PatDee819"
 REPO_NAME = "Financial-Data-Fetcher"
 BRANCH = "main"
@@ -64,6 +67,11 @@ def calculate_composite_score(results):
 # 2. UPLOAD TO GITHUB VIA API
 # ==============================
 def upload_file_to_github(file_path, file_content, commit_message):
+    # Added a check here in case the token isn't loaded (e.g., local run without setting env var)
+    if not GITHUB_TOKEN:
+        print("Error: GITHUB_TOKEN is missing. Cannot upload to GitHub.")
+        return False
+        
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
     headers = {
         "Authorization": f"token {GITHUB_TOKEN}",
