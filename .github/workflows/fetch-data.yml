@@ -35,4 +35,4 @@ jobs:
           # ${{ secrets.GH_TOKEN }} (right) is the Secret you created 
           # in your repository settings. They must match!
           GH_TOKEN: ${{ secrets.GH_TOKEN }} 
-        run: python your_script_name.py # <-- REPLACE with the actual name of your .py file!
+        run: generate_scores.py # <-- REPLACE with the actual name of your .py file!
