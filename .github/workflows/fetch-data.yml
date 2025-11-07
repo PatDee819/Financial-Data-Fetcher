@@ -1,45 +1,38 @@
-name: Generate Scores
+name: Financial Data Fetcher & Uploader
 
 on:
+  # Schedule to run the script every hour (at the top of the hour)
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '0 * * * *' 
+  # Allows manual runs from the GitHub UI (optional, but helpful for testing)
   workflow_dispatch:
 
 jobs:
-  generate:
+  run_data_fetcher:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
+    
     steps:
-    - uses: actions/checkout@v4
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout Repository
+        # Action to pull your code onto the GitHub server
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
+      - name: Set up Python Environment
+        # Action to install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x' 
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install yfinance pandas numpy websockets
+      - name: Install Dependencies
+        # Installs all the libraries your script needs
+        run: |
+          pip install yfinance pandas numpy requests
 
-    - name: Run script
-      run: python generate_scores.py > script_output.log 2>&1
-
-    - name: Upload logs
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: script-logs
-        path: script_output.log
-
-    - name: Commit and Push CSV
-      run: |
-        git config --global user.email "action@github.com"
-        git config --global user.name "GitHub Action"
-        git add scores.csv
-        git diff --staged --quiet || git commit -m "Update scores.csv [skip ci]"
-        git push
+      - name: Run Python Script and Upload Results
+        # This is where the script runs, passing the token securely
+        env:
+          # IMPORTANT: GH_TOKEN (left) is the environment variable name 
+          # your Python script reads (os.getenv("GH_TOKEN")).
+          # ${{ secrets.GH_TOKEN }} (right) is the Secret you created 
+          # in your repository settings. They must match!
+          GH_TOKEN: ${{ secrets.GH_TOKEN }} 
+        run: python your_script_name.py # <-- REPLACE with the actual name of your .py file!
