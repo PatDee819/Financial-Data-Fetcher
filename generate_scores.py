@@ -54,9 +54,12 @@ def calculate_composite_score(results):
         "DXY_Level": (results.get("DXY_Current"), 80, 120, 0.10),
         "DXY_Momentum": (results.get("DXY_Momentum"), -5, 5, 0.05),
         "DXY_Volatility": (results.get("DXY_Volatility"), 0, 30, 0.05),
-        # MODIFICATION 1: GOLD_Level Max Range set to 5000 to normalize $4209
-        "GOLD_Level": (results.get("GOLD_Current"), 2000, 5000, 0.10),
-        # MODIFICATION 2: Narrowed GOLD_Momentum range for higher sensitivity
+        
+        # MODIFICATION 1: GOLD_Level Max Range set to 5000 
+        # MODIFICATION 2: Reduced weight (0.10 -> 0.02) to eliminate permanent bias
+        "GOLD_Level": (results.get("GOLD_Current"), 2000, 5000, 0.02), 
+        
+        # MODIFICATION 3: Narrowed GOLD_Momentum range for higher sensitivity
         "GOLD_Momentum": (results.get("GOLD_Momentum"), -1.5, 1.5, 0.20),
         "GOLD_Volatility": (results.get("GOLD_Volatility"), 0, 25, 0.05),
     }
@@ -120,7 +123,7 @@ def generate_predictive_bias(results, current_score):
         projected = current_score + slope * 2.0 + boost1 + boost2 + boost3
         bias = projected - current_score
 
-        # MODIFICATION 3: Lowered bias threshold from +/- 6 to +/- 3.0
+        # MODIFICATION 4: Lowered bias threshold from +/- 6 to +/- 3.0
         if bias > 3.0:
             action = "LONG"
         elif bias < -3.0:
