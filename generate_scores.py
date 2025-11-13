@@ -7,20 +7,18 @@ import requests
 from io import StringIO
 import base64
 import json
-import os # NEW IMPORT
+import os 
 
 # ==============================
 # GITHUB CONFIG (EDIT THESE)
 # ==============================
-# 🛑 CRITICAL CHANGE: Token is now read from an environment variable (GH_TOKEN)
-# This variable will be set securely by GitHub Actions and is NOT visible in the code.
 GITHUB_TOKEN = os.getenv("GH_TOKEN") 
 REPO_OWNER = "PatDee819"
 REPO_NAME = "Financial-Data-Fetcher"
 BRANCH = "main"
 
 # ==============================
-# 1. FETCH & COMPOSITE (UNCHANGED)
+# 1. FETCH & COMPOSITE 
 # ==============================
 def fetch_financial_data(ticker, period="5d", interval="1h", retries=3):
     for attempt in range(retries):
@@ -56,8 +54,10 @@ def calculate_composite_score(results):
         "DXY_Level": (results.get("DXY_Current"), 80, 120, 0.10),
         "DXY_Momentum": (results.get("DXY_Momentum"), -5, 5, 0.05),
         "DXY_Volatility": (results.get("DXY_Volatility"), 0, 30, 0.05),
-        "GOLD_Level": (results.get("GOLD_Current"), 2000, 4000, 0.10),
-        "GOLD_Momentum": (results.get("GOLD_Momentum"), -3, 3, 0.20),
+        # MODIFICATION 1: GOLD_Level Max Range set to 5000 to normalize $4209
+        "GOLD_Level": (results.get("GOLD_Current"), 2000, 5000, 0.10),
+        # MODIFICATION 2: Narrowed GOLD_Momentum range for higher sensitivity
+        "GOLD_Momentum": (results.get("GOLD_Momentum"), -1.5, 1.5, 0.20),
         "GOLD_Volatility": (results.get("GOLD_Volatility"), 0, 25, 0.05),
     }
     score = sum(normalize_value(v, minv, maxv) * w for v, minv, maxv, w in inputs.values() if v is not None)
@@ -67,7 +67,6 @@ def calculate_composite_score(results):
 # 2. UPLOAD TO GITHUB VIA API
 # ==============================
 def upload_file_to_github(file_path, file_content, commit_message):
-    # Added a check here in case the token isn't loaded (e.g., local run without setting env var)
     if not GITHUB_TOKEN:
         print("Error: GITHUB_TOKEN is missing. Cannot upload to GitHub.")
         return False
@@ -92,6 +91,57 @@ def upload_file_to_github(file_path, file_content, commit_message):
     
     response = requests.put(url, headers=headers, data=json.dumps(data))
     return response.status_code == 200
+
+# ==============================
+# 6. PREDICTIVE BIAS 
+# ==============================
+def generate_predictive_bias(results, current_score):
+    try:
+        url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/scores.csv"
+        hist = pd.read_csv(StringIO(requests.get(url, timeout=10).text))
+        scores = hist['Composite_Score'].dropna().tail(12).tolist()
+
+        if len(scores) >= 6:
+            recent = np.mean(scores[-3:])
+            prior = np.mean(scores[-6:-3])
+            slope = recent - prior
+        else:
+            slope = 0
+
+        vix_mom = results.get("VIX_Momentum", 0)
+        gvz_mom = results.get("GVZ_Momentum", 0)
+        dxy_mom = results.get("DXY_Momentum", 0)
+        gold_mom = results.get("GOLD_Momentum", 0)
+
+        boost1 = 3.0 if gvz_mom > 1.5 and vix_mom < -1 else 0
+        boost2 = 2.5 if dxy_mom < -0.5 and results.get("GOLD_Volatility", 100) < 15 else 0
+        boost3 = 1.5 if len(scores) >= 3 and (scores[-1] - scores[-2]) > (scores[-2] - scores[-3]) else 0
+
+        projected = current_score + slope * 2.0 + boost1 + boost2 + boost3
+        bias = projected - current_score
+
+        # MODIFICATION 3: Lowered bias threshold from +/- 6 to +/- 3.0
+        if bias > 3.0:
+            action = "LONG"
+        elif bias < -3.0:
+            action = "SHORT"
+        else:
+            action = "FLAT"
+
+        return {
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "bias": "BULL" if bias > 0 else "BEAR" if bias < 0 else "NEUTRAL",
+            "strength": round(bias, 1),
+            "confidence": min(95, 60 + abs(bias) * 3),
+            "action": action,
+            "projected_move_pct": round(bias * 0.22, 1)
+        }
+    except:
+        return {
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "bias": "NEUTRAL", "strength": 0.0, "confidence": 0,
+            "action": "FLAT", "projected_move_pct": 0.0
+        }
 
 # ==============================
 # 3. MAIN: GENERATE & UPLOAD
@@ -140,56 +190,6 @@ def main():
     # Upload bias_signal.csv
     if upload_file_to_github("bias_signal.csv", bias_content, f"Update bias_signal.csv - {datetime.now().strftime('%Y-%m-%d %H:%M:%S') }"):
         print(f"bias_signal.csv → Uploaded | Action: {signal['action']} | Bias: {signal['bias']} | Strength: {signal['strength']:+.1f}")
-
-# ==============================
-# 6. PREDICTIVE BIAS (SAME AS BEFORE)
-# ==============================
-def generate_predictive_bias(results, current_score):
-    try:
-        url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/scores.csv"
-        hist = pd.read_csv(StringIO(requests.get(url, timeout=10).text))
-        scores = hist['Composite_Score'].dropna().tail(12).tolist()
-
-        if len(scores) >= 6:
-            recent = np.mean(scores[-3:])
-            prior = np.mean(scores[-6:-3])
-            slope = recent - prior
-        else:
-            slope = 0
-
-        vix_mom = results.get("VIX_Momentum", 0)
-        gvz_mom = results.get("GVZ_Momentum", 0)
-        dxy_mom = results.get("DXY_Momentum", 0)
-        gold_mom = results.get("GOLD_Momentum", 0)
-
-        boost1 = 3.0 if gvz_mom > 1.5 and vix_mom < -1 else 0
-        boost2 = 2.5 if dxy_mom < -0.5 and results.get("GOLD_Volatility", 100) < 15 else 0
-        boost3 = 1.5 if len(scores) >= 3 and (scores[-1] - scores[-2]) > (scores[-2] - scores[-3]) else 0
-
-        projected = current_score + slope * 2.0 + boost1 + boost2 + boost3
-        bias = projected - current_score
-
-        if bias > 6:
-            action = "LONG"
-        elif bias < -6:
-            action = "SHORT"
-        else:
-            action = "FLAT"
-
-        return {
-            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "bias": "BULL" if bias > 0 else "BEAR" if bias < 0 else "NEUTRAL",
-            "strength": round(bias, 1),
-            "confidence": min(95, 60 + abs(bias) * 3),
-            "action": action,
-            "projected_move_pct": round(bias * 0.22, 1)
-        }
-    except:
-        return {
-            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "bias": "NEUTRAL", "strength": 0.0, "confidence": 0,
-            "action": "FLAT", "projected_move_pct": 0.0
-        }
 
 # ==============================
 # RUN
