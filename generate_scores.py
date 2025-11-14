@@ -55,11 +55,8 @@ def calculate_composite_score(results):
         "DXY_Momentum": (results.get("DXY_Momentum"), -5, 5, 0.05),
         "DXY_Volatility": (results.get("DXY_Volatility"), 0, 30, 0.05),
         
-        # MODIFICATION 1: GOLD_Level Max Range set to 5000 
-        # MODIFICATION 2: Reduced weight (0.10 -> 0.02) to eliminate permanent bias
+        # All MODIFICATIONS for sensitivity and high price are still here:
         "GOLD_Level": (results.get("GOLD_Current"), 2000, 5000, 0.02), 
-        
-        # MODIFICATION 3: Narrowed GOLD_Momentum range for higher sensitivity
         "GOLD_Momentum": (results.get("GOLD_Momentum"), -1.5, 1.5, 0.20),
         "GOLD_Volatility": (results.get("GOLD_Volatility"), 0, 25, 0.05),
     }
@@ -96,12 +93,13 @@ def upload_file_to_github(file_path, file_content, commit_message):
     return response.status_code == 200
 
 # ==============================
-# 6. PREDICTIVE BIAS 
+# 6. PREDICTIVE BIAS (WITH ERROR LOGGING)
 # ==============================
 def generate_predictive_bias(results, current_score):
     try:
         url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/scores.csv"
-        hist = pd.read_csv(StringIO(requests.get(url, timeout=10).text))
+        # This line attempts to fetch the historical data
+        hist = pd.read_csv(StringIO(requests.get(url, timeout=10).text)) 
         scores = hist['Composite_Score'].dropna().tail(12).tolist()
 
         if len(scores) >= 6:
@@ -123,7 +121,6 @@ def generate_predictive_bias(results, current_score):
         projected = current_score + slope * 2.0 + boost1 + boost2 + boost3
         bias = projected - current_score
 
-        # MODIFICATION 4: Lowered bias threshold from +/- 6 to +/- 3.0
         if bias > 3.0:
             action = "LONG"
         elif bias < -3.0:
@@ -139,7 +136,10 @@ def generate_predictive_bias(results, current_score):
             "action": action,
             "projected_move_pct": round(bias * 0.22, 1)
         }
-    except:
+    except Exception as e:
+        # 🚨 ERROR LOGGING ADDED HERE 🚨
+        print(f"Prediction Error: Failed to calculate slope from history. Full error: {e}") 
+        
         return {
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             "bias": "NEUTRAL", "strength": 0.0, "confidence": 0,
