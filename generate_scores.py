@@ -119,9 +119,9 @@ def generate_predictive_bias(results, current_score):
             scores = hist['Composite_Score'].dropna().tail(12).tolist()
 
             if len(scores) >= 6:
-                recent = np.mean(scores[-3:])    # Average of last 3 readings
-                prior = np.mean(scores[-6:-3])   # Average of 3 readings before
-                slope = recent - prior           # Trend direction
+                recent = np.mean(scores[-3:])
+                prior = np.mean(scores[-6:-3])
+                slope = recent - prior
                 print(f"✅ Historical slope calculated: {slope:.2f} (from {len(scores)} readings)")
             else:
                 print(f"⚠️  Only {len(scores)} readings available. Need 6 for slope calculation.")
@@ -201,7 +201,7 @@ def main():
         else:
             print("✗ FAILED")
         
-        time.sleep(3)  # Rate limiting
+        time.sleep(3)
 
     # Calculate composite score
     composite = calculate_composite_score(results)
@@ -211,61 +211,61 @@ def main():
     # ==============================
     # APPEND TO scores.csv (FIXED)
     # ==============================
-   print("\n💾 Updating scores.csv...")
-
-try:
-    url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/scores.csv"
-    response = requests.get(url, timeout=10)
+    print("\n💾 Updating scores.csv...")
     
-    if response.status_code == 200:
-        existing_df = pd.read_csv(StringIO(response.text))
+    try:
+        url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/scores.csv"
+        response = requests.get(url, timeout=10)
         
-        # Check if Timestamp is first column
-        if 'Timestamp' in existing_df.columns and existing_df.columns[0] != 'Timestamp':
-            print("  ⚠️  Wrong column order detected - reordering...")
-            # Reorder columns to put Timestamp first
-            cols = ['Timestamp'] + [col for col in existing_df.columns if col != 'Timestamp']
-            existing_df = existing_df[cols]
-        
-        print(f"  📖 Loaded {len(existing_df)} existing readings")
-    else:
+        if response.status_code == 200:
+            existing_df = pd.read_csv(StringIO(response.text))
+            
+            # Check if Timestamp is first column
+            if 'Timestamp' in existing_df.columns and existing_df.columns[0] != 'Timestamp':
+                print("  ⚠️  Wrong column order detected - reordering...")
+                cols = ['Timestamp'] + [col for col in existing_df.columns if col != 'Timestamp']
+                existing_df = existing_df[cols]
+            
+            print(f"  📖 Loaded {len(existing_df)} existing readings")
+        else:
+            existing_df = pd.DataFrame()
+            print("  📝 Creating new scores.csv (first reading)")
+            
+    except Exception as e:
         existing_df = pd.DataFrame()
-        print("  📝 Creating new scores.csv (first reading)")
-        
-except Exception as e:
-    existing_df = pd.DataFrame()
-    print(f"  📝 Creating new scores.csv: {e}")
+        print(f"  📝 Creating new scores.csv: {e}")
 
-# Create current reading with proper column order
-current_data = {
-    'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-    'VIX_Current': results.get('VIX_Current'),
-    'VIX_Momentum': results.get('VIX_Momentum'),
-    'VIX_Volatility': results.get('VIX_Volatility'),
-    'GVZ_Current': results.get('GVZ_Current'),
-    'GVZ_Momentum': results.get('GVZ_Momentum'),
-    'GVZ_Volatility': results.get('GVZ_Volatility'),
-    'DXY_Current': results.get('DXY_Current'),
-    'DXY_Momentum': results.get('DXY_Momentum'),
-    'DXY_Volatility': results.get('DXY_Volatility'),
-    'GOLD_Current': results.get('GOLD_Current'),
-    'GOLD_Momentum': results.get('GOLD_Momentum'),
-    'GOLD_Volatility': results.get('GOLD_Volatility'),
-    'Composite_Score': results.get('Composite_Score')
-}
+    # Create current reading with proper column order
+    current_data = {
+        'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'VIX_Current': results.get('VIX_Current'),
+        'VIX_Momentum': results.get('VIX_Momentum'),
+        'VIX_Volatility': results.get('VIX_Volatility'),
+        'GVZ_Current': results.get('GVZ_Current'),
+        'GVZ_Momentum': results.get('GVZ_Momentum'),
+        'GVZ_Volatility': results.get('GVZ_Volatility'),
+        'DXY_Current': results.get('DXY_Current'),
+        'DXY_Momentum': results.get('DXY_Momentum'),
+        'DXY_Volatility': results.get('DXY_Volatility'),
+        'GOLD_Current': results.get('GOLD_Current'),
+        'GOLD_Momentum': results.get('GOLD_Momentum'),
+        'GOLD_Volatility': results.get('GOLD_Volatility'),
+        'Composite_Score': results.get('Composite_Score')
+    }
 
-current_reading = pd.DataFrame([current_data])
+    current_reading = pd.DataFrame([current_data])
 
-# Append to historical data
-if not existing_df.empty:
-    df_legacy = pd.concat([existing_df, current_reading], ignore_index=True)
-else:
-    df_legacy = current_reading
+    # Append to historical data
+    if not existing_df.empty:
+        df_legacy = pd.concat([existing_df, current_reading], ignore_index=True)
+    else:
+        df_legacy = current_reading
 
-# Keep only last 24 readings (12 hours)
-df_legacy = df_legacy.tail(24)
+    # Keep only last 24 readings (12 hours)
+    df_legacy = df_legacy.tail(24)
+    
+    print(f"  💾 Total readings after append: {len(df_legacy)}")
 
-print(f"  💾 Total readings after append: {len(df_legacy)}")
     # Upload scores.csv
     scores_content = df_legacy.to_csv(index=False)
     if upload_file_to_github("scores.csv", scores_content, f"Reading #{len(df_legacy)} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"):
