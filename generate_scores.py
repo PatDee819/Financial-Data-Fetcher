@@ -21,6 +21,7 @@ BRANCH = "main"
 # 1. FETCH & COMPOSITE 
 # ==============================
 def fetch_financial_data(ticker, period="5d", interval="1h", retries=3):
+    """Fetch current price, momentum, and volatility for a given ticker."""
     for attempt in range(retries):
         try:
             asset = yf.Ticker(ticker)
@@ -36,14 +37,18 @@ def fetch_financial_data(ticker, period="5d", interval="1h", retries=3):
             volatility = returns.std() * np.sqrt(252 * 6.5) * 100
             return current_price, momentum, volatility
         except Exception as e:
+            print(f"⚠️  Attempt {attempt + 1} failed for {ticker}: {e}")
             time.sleep(2 ** attempt)
     return None, None, None
 
 def normalize_value(value, min_val, max_val):
-    if value is None or min_val == max_val: return 50
+    """Normalize value to 0-100 scale."""
+    if value is None or min_val == max_val: 
+        return 50
     return max(0, min(100, ((value - min_val) / (max_val - min_val)) * 100))
 
 def calculate_composite_score(results):
+    """Calculate weighted composite score from market indicators."""
     inputs = {
         "VIX_Level": (results.get("VIX_Current"), 10, 50, 0.10),
         "VIX_Momentum": (results.get("VIX_Momentum"), -10, 10, 0.05),
@@ -54,8 +59,6 @@ def calculate_composite_score(results):
         "DXY_Level": (results.get("DXY_Current"), 80, 120, 0.10),
         "DXY_Momentum": (results.get("DXY_Momentum"), -5, 5, 0.05),
         "DXY_Volatility": (results.get("DXY_Volatility"), 0, 30, 0.05),
-        
-        # All MODIFICATIONS for sensitivity and high price are still here:
         "GOLD_Level": (results.get("GOLD_Current"), 2000, 5000, 0.02), 
         "GOLD_Momentum": (results.get("GOLD_Momentum"), -1.5, 1.5, 0.20),
         "GOLD_Volatility": (results.get("GOLD_Volatility"), 0, 25, 0.05),
@@ -67,8 +70,9 @@ def calculate_composite_score(results):
 # 2. UPLOAD TO GITHUB VIA API
 # ==============================
 def upload_file_to_github(file_path, file_content, commit_message):
+    """Upload or update a file in GitHub repository."""
     if not GITHUB_TOKEN:
-        print("Error: GITHUB_TOKEN is missing. Cannot upload to GitHub.")
+        print("❌ Error: GITHUB_TOKEN is missing. Cannot upload to GitHub.")
         return False
         
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_path}"
@@ -90,109 +94,191 @@ def upload_file_to_github(file_path, file_content, commit_message):
         data["sha"] = sha
     
     response = requests.put(url, headers=headers, data=json.dumps(data))
-    return response.status_code == 200
+    
+    if response.status_code in [200, 201]:
+        return True
+    else:
+        print(f"❌ GitHub upload failed: {response.status_code} - {response.text}")
+        return False
 
 # ==============================
-# 6. PREDICTIVE BIAS (WITH ERROR LOGGING)
+# 3. PREDICTIVE BIAS GENERATOR
 # ==============================
 def generate_predictive_bias(results, current_score):
+    """Generate trading bias based on historical trends and current momentum."""
+    slope = 0
+    scores = []
+    
     try:
+        # Fetch historical scores from GitHub
         url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/scores.csv"
-        # This line attempts to fetch the historical data
-        hist = pd.read_csv(StringIO(requests.get(url, timeout=10).text)) 
-        scores = hist['Composite_Score'].dropna().tail(12).tolist()
-
-        if len(scores) >= 6:
-            recent = np.mean(scores[-3:])
-            prior = np.mean(scores[-6:-3])
-            slope = recent - prior
-        else:
-            slope = 0
-
-        vix_mom = results.get("VIX_Momentum", 0)
-        gvz_mom = results.get("GVZ_Momentum", 0)
-        dxy_mom = results.get("DXY_Momentum", 0)
-        gold_mom = results.get("GOLD_Momentum", 0)
-
-        boost1 = 3.0 if gvz_mom > 1.5 and vix_mom < -1 else 0
-        boost2 = 2.5 if dxy_mom < -0.5 and results.get("GOLD_Volatility", 100) < 15 else 0
-        boost3 = 1.5 if len(scores) >= 3 and (scores[-1] - scores[-2]) > (scores[-2] - scores[-3]) else 0
-
-        projected = current_score + slope * 2.0 + boost1 + boost2 + boost3
-        bias = projected - current_score
-
-        if bias > 3.0:
-            action = "LONG"
-        elif bias < -3.0:
-            action = "SHORT"
-        else:
-            action = "FLAT"
-
-        return {
-            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "bias": "BULL" if bias > 0 else "BEAR" if bias < 0 else "NEUTRAL",
-            "strength": round(bias, 1),
-            "confidence": min(95, 60 + abs(bias) * 3),
-            "action": action,
-            "projected_move_pct": round(bias * 0.22, 1)
-        }
-    except Exception as e:
-        # 🚨 ERROR LOGGING ADDED HERE 🚨
-        print(f"Prediction Error: Failed to calculate slope from history. Full error: {e}") 
+        response = requests.get(url, timeout=10)
         
-        return {
-            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "bias": "NEUTRAL", "strength": 0.0, "confidence": 0,
-            "action": "FLAT", "projected_move_pct": 0.0
-        }
+        if response.status_code == 200:
+            hist = pd.read_csv(StringIO(response.text))
+            scores = hist['Composite_Score'].dropna().tail(12).tolist()
+
+            if len(scores) >= 6:
+                recent = np.mean(scores[-3:])    # Average of last 3 readings
+                prior = np.mean(scores[-6:-3])   # Average of 3 readings before
+                slope = recent - prior           # Trend direction
+                print(f"✅ Historical slope calculated: {slope:.2f} (from {len(scores)} readings)")
+            else:
+                print(f"⚠️  Only {len(scores)} readings available. Need 6 for slope calculation.")
+        else:
+            print(f"⚠️  scores.csv not found or inaccessible (HTTP {response.status_code})")
+            
+    except Exception as e:
+        print(f"⚠️  Cannot access scores.csv: {e}")
+
+    # Extract current momentum values
+    vix_mom = results.get("VIX_Momentum", 0)
+    gvz_mom = results.get("GVZ_Momentum", 0)
+    dxy_mom = results.get("DXY_Momentum", 0)
+    gold_mom = results.get("GOLD_Momentum", 0)
+
+    # Calculate momentum boosts
+    boost1 = 3.0 if gvz_mom > 1.5 and vix_mom < -1 else 0
+    boost2 = 2.5 if dxy_mom < -0.5 and results.get("GOLD_Volatility", 100) < 15 else 0
+    boost3 = 1.5 if len(scores) >= 3 and (scores[-1] - scores[-2]) > (scores[-2] - scores[-3]) else 0
+
+    # Calculate projected score and bias
+    projected = current_score + (slope * 2.0) + boost1 + boost2 + boost3
+    bias = projected - current_score
+
+    # Determine trading action
+    if bias > 3.0:
+        action = "LONG"
+    elif bias < -3.0:
+        action = "SHORT"
+    else:
+        action = "FLAT"
+
+    print(f"🎯 Bias Calculation: slope={slope:.2f}, boost1={boost1:.1f}, boost2={boost2:.1f}, boost3={boost3:.1f}")
+    print(f"🎯 Final Bias: {bias:.1f} | Action: {action}")
+
+    return {
+        "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        "bias": "BULL" if bias > 0 else "BEAR" if bias < 0 else "NEUTRAL",
+        "strength": round(bias, 1),
+        "confidence": min(95, 60 + abs(bias) * 3),
+        "action": action,
+        "projected_move_pct": round(bias * 0.22, 1)
+    }
 
 # ==============================
-# 3. MAIN: GENERATE & UPLOAD
+# 4. MAIN EXECUTION
 # ==============================
 def main():
+    print("=" * 60)
+    print("🚀 FINANCIAL DATA FETCHER - STARTED")
+    print(f"⏰ Run Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 60)
+    
+    # Fetch market data for all tickers
     tickers = {"VIX": "^VIX", "GVZ": "^GVZ", "DXY": "DX-Y.NYB", "GOLD": "GC=F"}
     results = {}
+    
+    print("\n📊 Fetching market data...")
     for key, ticker in tickers.items():
+        print(f"  → {key} ({ticker})...", end=" ")
         current, mom, vol = fetch_financial_data(ticker)
+        
+        # Fallback tickers if primary fails
         if key == "VIX" and current is None:
+            print("fallback to VXX...", end=" ")
             current, mom, vol = fetch_financial_data("VXX")
         if key == "GOLD" and current is None:
+            print("fallback to GLD...", end=" ")
             current, mom, vol = fetch_financial_data("GLD")
+        
         results[f"{key}_Current"] = current
         results[f"{key}_Momentum"] = mom
         results[f"{key}_Volatility"] = vol
-        time.sleep(3)
+        
+        if current is not None:
+            print(f"✓ (Price: {current:.2f}, Mom: {mom:+.2f}%)")
+        else:
+            print("✗ FAILED")
+        
+        time.sleep(3)  # Rate limiting
 
+    # Calculate composite score
     composite = calculate_composite_score(results)
     results["Composite_Score"] = composite
+    print(f"\n📈 Composite Score: {composite:.2f}")
 
     # ==============================
-    # 4. GENERATE LEGACY scores.csv
+    # APPEND TO scores.csv (FIXED)
     # ==============================
-    df_legacy = pd.DataFrame([results])
-    df_legacy = df_legacy[[
+    print("\n💾 Updating scores.csv...")
+    
+    try:
+        url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/scores.csv"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            existing_df = pd.read_csv(StringIO(response.text))
+            print(f"  📖 Loaded {len(existing_df)} existing readings")
+        else:
+            existing_df = pd.DataFrame()
+            print("  📝 Creating new scores.csv (first reading)")
+            
+    except Exception as e:
+        existing_df = pd.DataFrame()
+        print(f"  📝 Creating new scores.csv: {e}")
+
+    # Prepare current reading
+    current_reading = pd.DataFrame([results])
+    current_reading = current_reading[[
         'VIX_Current','VIX_Momentum','VIX_Volatility',
         'GVZ_Current','GVZ_Momentum','GVZ_Volatility',
         'DXY_Current','DXY_Momentum','DXY_Volatility',
         'GOLD_Current','GOLD_Momentum','GOLD_Volatility',
         'Composite_Score'
     ]]
-    scores_content = df_legacy.to_csv(index=False, header=True, na_rep='')
+    
+    # Add timestamp as first column
+    current_reading.insert(0, 'Timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+
+    # Append to historical data
+    if not existing_df.empty:
+        df_legacy = pd.concat([existing_df, current_reading], ignore_index=True)
+    else:
+        df_legacy = current_reading
+
+    # Keep only last 24 readings (12 hours of history at 30-min intervals)
+    df_legacy = df_legacy.tail(24)
+    
+    print(f"  💾 Total readings after append: {len(df_legacy)}")
 
     # Upload scores.csv
-    if upload_file_to_github("scores.csv", scores_content, f"Update scores.csv - {datetime.now().strftime('%Y-%m-%d %H:%M:%S') }"):
-        print("scores.csv → Uploaded to GitHub")
+    scores_content = df_legacy.to_csv(index=False)
+    if upload_file_to_github("scores.csv", scores_content, f"Reading #{len(df_legacy)} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"):
+        print(f"  ✅ scores.csv uploaded successfully ({len(df_legacy)} readings)")
+    else:
+        print("  ❌ Failed to upload scores.csv")
 
     # ==============================
-    # 5. GENERATE NEW bias_signal.csv
+    # GENERATE bias_signal.csv
     # ==============================
+    print("\n🎯 Generating trading bias...")
     signal = generate_predictive_bias(results, composite)
     signal_df = pd.DataFrame([signal])
     bias_content = signal_df.to_csv(index=False)
     
-    # Upload bias_signal.csv
-    if upload_file_to_github("bias_signal.csv", bias_content, f"Update bias_signal.csv - {datetime.now().strftime('%Y-%m-%d %H:%M:%S') }"):
-        print(f"bias_signal.csv → Uploaded | Action: {signal['action']} | Bias: {signal['bias']} | Strength: {signal['strength']:+.1f}")
+    if upload_file_to_github("bias_signal.csv", bias_content, f"Update bias - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"):
+        print(f"  ✅ bias_signal.csv uploaded")
+        print(f"     → Action: {signal['action']}")
+        print(f"     → Bias: {signal['bias']}")
+        print(f"     → Strength: {signal['strength']:+.1f}")
+        print(f"     → Confidence: {signal['confidence']:.0f}%")
+    else:
+        print("  ❌ Failed to upload bias_signal.csv")
+
+    print("\n" + "=" * 60)
+    print("✅ EXECUTION COMPLETED")
+    print("=" * 60)
 
 # ==============================
 # RUN
