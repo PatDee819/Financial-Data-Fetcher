@@ -20,7 +20,7 @@ BRANCH = "main"
 # ==============================
 # 1. FETCH & COMPOSITE 
 # ==============================
-def fetch_financial_data(ticker, period="5d", interval="1h", retries=3):
+def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
     """Fetch current price, momentum, and volatility for a given ticker."""
     for attempt in range(retries):
         try:
