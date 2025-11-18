@@ -262,7 +262,7 @@ def main():
         df_legacy = current_reading
 
     # Keep only last 24 readings (12 hours)
-    df_legacy = df_legacy.tail(24)
+    df_legacy = df_legacy.tail(48)
     
     print(f"  💾 Total readings after append: {len(df_legacy)}")
 
