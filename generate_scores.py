@@ -8,6 +8,7 @@ from io import StringIO
 import base64
 import json
 import os
+from numpy.polynomial.polynomial import polyfit # Using polyfit for linear regression
 
 # =========================================================
 # GITHUB CONFIG (CRITICAL: ACTION REQUIRED)
@@ -43,18 +44,19 @@ def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
     """Fetch data and calculate momentum, volatility, and RSI (for GOLD)."""
     for attempt in range(retries):
         try:
+            # Note: 60 data points (48 for 5 days * 30m) are needed for RSI & momentum calculation
             hist_data = yf.download(ticker, period=period, interval=interval, progress=False)
             
-            if hist_data.empty or len(hist_data) < 5:
+            if hist_data.empty or len(hist_data) < 20: # Ensure enough data for RSI (14 periods)
                 continue
 
             current_price = hist_data["Close"].iloc[-1]
-            initial_price = hist_data["Close"].iloc[-5]
+            initial_price = hist_data["Close"].iloc[-15] # Using 15 periods for momentum lookback
             
-            # Momentum (% change over 5 periods)
+            # Momentum (% change over 15 periods)
             momentum = ((current_price - initial_price) / initial_price) * 100
             
-            # Volatility (Annualized Standard Deviation of Log Returns)
+            # Volatility (Annualized Standard Deviation of Log Returns - 13 intervals/day)
             log_returns = np.log(hist_data['Close'] / hist_data['Close'].shift(1))
             daily_volatility = log_returns.std() * np.sqrt(252 * 13)
             volatility = daily_volatility * 100 # Convert to percentage
@@ -66,9 +68,11 @@ def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
                 delta = hist_data["Close"].diff()
                 gain = delta.where(delta > 0, 0)
                 loss = -delta.where(delta < 0, 0)
+                # Use a larger window for initial EMA to ensure stability
                 avg_gain = gain.ewm(com=period_rsi - 1, adjust=False).mean()
                 avg_loss = loss.ewm(com=period_rsi - 1, adjust=False).mean()
-                rs = avg_gain / avg_loss
+                # Handle division by zero for RS
+                rs = avg_gain / avg_loss.replace(0, 1e-10) 
                 rsi_value = 100 - (100 / (1 + rs))
                 current_rsi = rsi_value.iloc[-1]
 
@@ -82,26 +86,32 @@ def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
     return None, None, None, None
 
 def calculate_composite_score(results):
-    """Calculate weighted composite score with tighter momentum scaling."""
+    """
+    Calculate weighted composite score. 
+    GVZ weight reduced to address circularity risk.
+    """
+    
     # Define (Value, Min Range, Max Range, Weight)
+    # Weights adjusted: GVZ reduced, GOLD momentum slightly increased.
     inputs = {
-        # Levels and Volatility 
+        # LEVELS AND VOLATILITY (Total Weight: 0.47)
         "VIX_Level": (results.get("VIX_Current"), 10, 50, 0.10),
         "VIX_Volatility": (results.get("VIX_Volatility"), 0, 40, 0.05),
-        "GVZ_Level": (results.get("GVZ_Current"), 10, 40, 0.15),
-        "GVZ_Volatility": (results.get("GVZ_Volatility"), 0, 40, 0.05),
+        "GVZ_Level": (results.get("GVZ_Current"), 10, 40, 0.10),      # Reduced from 0.15
+        "GVZ_Volatility": (results.get("GVZ_Volatility"), 0, 40, 0.02),    # Reduced from 0.05
         "DXY_Level": (results.get("DXY_Current"), 80, 120, 0.10),
         "DXY_Volatility": (results.get("DXY_Volatility"), 0, 30, 0.05),
-        "GOLD_Level": (results.get("GOLD_Current"), 1800, 3000, 0.02), 
-        "GOLD_Volatility": (results.get("GOLD_Volatility"), 0, 25, 0.05),
+        "GOLD_Level": (results.get("GOLD_Current"), 1800, 3000, 0.02),
+        "GOLD_Volatility": (results.get("GOLD_Volatility"), 0, 25, 0.03), # Reduced slightly
         
-        # MOMENTUM (Tighter Scaling)
-        "VIX_Momentum": (results.get("VIX_Momentum"), -5.0, 5.0, 0.05),
-        "GVZ_Momentum": (results.get("GVZ_Momentum"), -5.0, 5.0, 0.10),
+        # MOMENTUM (Total Weight: 0.53)
+        "VIX_Momentum": (results.get("VIX_Momentum"), -5.0, 5.0, 0.08),  # Increased from 0.05
+        "GVZ_Momentum": (results.get("GVZ_Momentum"), -5.0, 5.0, 0.05),  # Reduced from 0.10
         "DXY_Momentum": (results.get("DXY_Momentum"), -3.0, 3.0, 0.05),
-        "GOLD_Momentum": (results.get("GOLD_Momentum"), -1.0, 1.0, 0.20),
+        "GOLD_Momentum": (results.get("GOLD_Momentum"), -1.0, 1.0, 0.35), # Increased from 0.20
     }
     
+    # Note: Weights should sum to 1.0 (approx 0.47 + 0.53 = 1.0)
     score = sum(normalize_value(v, minv, maxv) * w for v, minv, maxv, w in inputs.values() if v is not None)
     return round(score, 2)
 
@@ -154,96 +164,120 @@ def upload_file_to_github(file_path, file_content, commit_message):
 # ==============================
 
 def generate_predictive_bias(results, current_score):
-    """Generate trading bias using dynamic momentum/mean-reversion and RSI filter."""
+    """
+    Generate trading bias using dynamic momentum/mean-reversion and RSI filter.
+    Uses Linear Regression for Slope calculation for stability.
+    """
     scores = []
-    slope = 0
+    slope = 0.0
     
     # --- Fetch Historical Scores for Slope Calculation ---
+    # We fetch 12 periods of data (6 hours history)
     try:
         url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/{SCORES_FILE}"
         response = requests.get(url, timeout=10)
         
         if response.status_code == 200:
             hist = pd.read_csv(StringIO(response.text))
-            scores = hist['Composite_Score'].dropna().tail(12).tolist()
+            scores = hist['Composite_Score'].dropna().tail(10).tolist() # Use 10 points for regression
 
-            if len(scores) >= 6:
-                recent = np.mean(scores[-3:])
-                prior = np.mean(scores[-6:-3])
-                slope = recent - prior
-                print(f"  Slope calculated: {slope:.2f}")
+            if len(scores) >= 5:
+                # LINEAR REGRESSION SLOPE (More robust than simple difference)
+                x = np.arange(len(scores))
+                # polyfit returns [intercept, slope]
+                coefficients = polyfit(x, scores, 1) 
+                slope = coefficients[1]
+                print(f"  Linear Regression Slope calculated: {slope:.3f}")
             
-    # CRITICAL FIX: Ensure the exception is not nested or ambiguous.
     except Exception as e:
         print(f"⚠️ Warning: Failed to fetch scores.csv for slope calculation: {e}")
         pass
 
-    # --- MEAN-REVERSION FACTOR ---
-    if current_score > 80:
-        slope_multiplier = -2.0  # FADE the move
-    elif current_score < 20:
-        slope_multiplier = -2.0  # FADE the move
+    # --- MEAN-REVERSION FACTOR (Dynamic Multiplier) ---
+    # The multiplier is key to switching between momentum-following and mean-reversion.
+    
+    # We use a gentler approach to Mean Reversion multiplier to mitigate early entry pain
+    if current_score > 85:
+        # Aggressive Fade: Score is very high, so slope is inverted to push bias down
+        slope_multiplier = -2.5
+    elif current_score > 70:
+        # Moderate Fade: Score is high, slight mean-reversion pressure
+        slope_multiplier = -0.5
+    elif current_score < 15:
+        # Aggressive Fade: Score is very low, so slope is inverted to push bias up
+        slope_multiplier = -2.5
+    elif current_score < 30:
+        # Moderate Fade: Score is low, slight mean-reversion pressure
+        slope_multiplier = -0.5
     else:
-        slope_multiplier = 2.0   # FOLLOW the trend
+        # Momentum-Following: In the 30-70 band, we follow the established trend
+        slope_multiplier = 2.0
         
     
-    # --- DYNAMIC BOOSTS ---
+    # --- DYNAMIC BOOSTS (Simplified/Refined) ---
     vix_mom = results.get("VIX_Momentum", 0)
-    gvz_mom = results.get("GVZ_Momentum", 0)
     dxy_mom = results.get("DXY_Momentum", 0)
-    gold_vol = results.get("GOLD_Volatility", 100)
     
-    boost1 = 0
-    if gvz_mom > 1.0 and vix_mom < -1.0: boost1 = 3.0
-    elif gvz_mom < -1.0 and vix_mom > 1.0: boost1 = -3.0
-        
-    boost2 = 0
-    if dxy_mom < -0.5 and gold_vol < 15: boost2 = 2.5
-    elif dxy_mom > 0.5 and gold_vol < 15: boost2 = -2.5
+    # Boost 1: Strong Risk-Off signal confirmation
+    boost1 = 0.0
+    if vix_mom > 1.0 and dxy_mom < -0.5: 
+        boost1 = 3.0 # VIX rising (risk-off) AND DXY falling (pro-GOLD)
+    elif vix_mom < -1.0 and dxy_mom > 0.5: 
+        boost1 = -3.0 # VIX falling (risk-on) AND DXY rising (anti-GOLD)
 
-    boost3 = 0
-    if len(scores) >= 3 and (scores[-1] - scores[-2]) > 0: boost3 = 1.5
-    elif len(scores) >= 3 and (scores[-1] - scores[-2]) < 0: boost3 = -1.5
-        
-    # Calculate projected score and bias
-    projected = current_score + (slope * slope_multiplier) + boost1 + boost2 + boost3
-    bias = projected - current_score
-
+    # Calculate projected score change (Bias)
+    bias = (slope * slope_multiplier * 10) + boost1 # Scaled slope for impact
+    
     # Determine initial trading action
-    if bias > 3.0:
+    strength_threshold = 3.0
+    
+    if bias > strength_threshold:
         action = "LONG"
-    elif bias < -3.0:
+    elif bias < -strength_threshold:
         action = "SHORT"
     else:
         action = "FLAT"
 
-    # --- RSI Confirmation Filter ---
+    # --- RSI Confirmation Filter (Less Aggressive 70/30) ---
+    # Addressing the expert's comment on restrictive filters (60/40 is too easy to hit)
     gold_rsi = results.get("GOLD_RSI")
-    rsi_threshold_long = 40
-    rsi_threshold_short = 60
+    rsi_threshold_long = 30 # Only filter SHORT if RSI is severely oversold
+    rsi_threshold_short = 70 # Only filter LONG if RSI is severely overbought
 
+    filter_reason = None
     if gold_rsi is not None:
         if action == "LONG" and gold_rsi > rsi_threshold_short:
             action = "FLAT"
+            filter_reason = f"RSI filter hit: {gold_rsi:.1f} > {rsi_threshold_short}"
         elif action == "SHORT" and gold_rsi < rsi_threshold_long:
             action = "FLAT"
+            filter_reason = f"RSI filter hit: {gold_rsi:.1f} < {rsi_threshold_long}"
     
-    # Update bias if action was filtered to FLAT
     if action == "FLAT":
         bias = 0.0
-    
+        
     # --- Dynamic Stop-Loss (SL) Calculation ---
     gold_vol_annual = results.get("GOLD_Volatility", 20.0)
     current_gold_price = results.get("GOLD_Current")
     
+    # SL is calculated based on current volatility, ensuring it's not fixed (Risk Management)
     if current_gold_price is None or current_gold_price == 0:
         suggested_sl_points = 15.0 # Fallback risk
     else:
+        # Calculate expected daily range and set SL to 2x expected noise over a few hours
         time_scale_factor = np.sqrt(252 * 13)
-        risk_points = current_gold_price * (gold_vol_annual / 100) / time_scale_factor * 4.0
+        risk_points = current_gold_price * (gold_vol_annual / 100) / time_scale_factor * 2.5
         suggested_sl_points = round(max(5.0, risk_points), 1)
         
-    print(f"  Final Action: {action} (Bias: {bias:+.1f} | SL: {suggested_sl_points:.1f} pts)")
+    # --- Position Sizing Factor (New Output for Risk Scaling) ---
+    # Pos Size Factor (1.0 = baseline size; 2.0 = double size)
+    # Caps strength at 6.0 for scaling purposes, addressing the expert's point.
+    scaled_strength = min(abs(bias), 6.0)
+    position_size_factor = round(1.0 + (scaled_strength / 6.0) * 1.0, 2)
+        
+    print(f"  Final Action: {action} (Bias: {bias:+.1f} | SL: {suggested_sl_points:.1f} pts | Size Factor: {position_size_factor:.2f})")
+    if filter_reason:
+        print(f"  Reason FLAT: {filter_reason}")
 
     return {
         "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -252,7 +286,8 @@ def generate_predictive_bias(results, current_score):
         "confidence": min(95, 60 + abs(bias) * 3),
         "action": action,
         "projected_move_pct": round(bias * 0.22, 1),
-        "suggested_sl_points": suggested_sl_points
+        "suggested_sl_points": suggested_sl_points,
+        "position_size_factor": position_size_factor # CRITICAL NEW OUTPUT
     }
 
 # ==============================
@@ -260,7 +295,7 @@ def generate_predictive_bias(results, current_score):
 # ==============================
 def main():
     print("=" * 60)
-    print("🚀 FINANCIAL DATA FETCHER - STARTED")
+    print("🚀 FINANCIAL DATA FETCHER - STARTED (V2 - Robust Slope & Sizing)")
     print("=" * 60)
     
     # CRITICAL: Check if GITHUB_TOKEN is available before proceeding
@@ -290,10 +325,11 @@ def main():
         if current is not None:
             
             # --- FIX: SAFELY EXTRACT SCALAR VALUES ---
-            safe_current = np.array(current).item()
-            safe_mom = np.array(mom).item()
-            safe_vol = np.array(vol).item()
-            safe_rsi = np.array(rsi).item() if rsi is not None else None
+            # Ensure compatibility by checking if we have a NumPy scalar or a regular Python scalar
+            safe_current = current.item() if hasattr(current, 'item') else current
+            safe_mom = mom.item() if hasattr(mom, 'item') else mom
+            safe_vol = vol.item() if hasattr(vol, 'item') else vol
+            safe_rsi = rsi.item() if hasattr(rsi, 'item') else rsi if rsi is not None else None
             
             # Store safe scalars in results dictionary
             results[f"{key}_Current"] = safe_current
@@ -301,7 +337,7 @@ def main():
             results[f"{key}_Volatility"] = safe_vol
             if safe_rsi is not None:
                 results[f"{key}_RSI"] = safe_rsi
-                    
+                            
             print(f"✓ (Price: {safe_current:.2f}, Mom: {safe_mom:+.2f}%)")
         else:
             print("✗ FAILED")
@@ -369,6 +405,7 @@ def main():
         print(f"  ✅ bias_signal.csv uploaded")
         print(f"    → Action: {signal['action']}")
         print(f"    → SL Points: {signal['suggested_sl_points']:+.1f}")
+        print(f"    → Position Size Factor: {signal['position_size_factor']:.2f} (Use for risk scaling)")
     else:
         print("  ❌ Failed to upload bias_signal.csv - SEE API ERROR ABOVE")
 
