@@ -12,7 +12,10 @@ import os
 # ==============================
 # GITHUB CONFIG (EDIT THESE)
 # ==============================
-GITHUB_TOKEN = os.getenv("GH_TOKEN")  # Reads from environment variable
+# ⚠️ ACTION REQUIRED: REPLACE PLACEHOLDERS
+GITHUB_TOKEN = os.getenv("GH_TOKEN")  # Reads from environment variable (RECOMMENDED)
+# If GITHUB_TOKEN is not set as an env var, you can replace the line below with your token:
+# GITHUB_TOKEN = "YOUR_GITHUB_TOKEN_HERE" 
 REPO_OWNER = "YOUR_REPO_OWNER"
 REPO_NAME = "YOUR_REPO_NAME"
 BRANCH = "main"
@@ -26,7 +29,7 @@ TICKERS = {
 SCORES_FILE = "scores.csv"
 
 # ==============================
-# 1. FETCH & COMPOSITE (ENHANCED)
+# 1. FETCH & COMPOSITE FUNCTIONS
 # ==============================
 
 def normalize_value(value, min_val, max_val):
@@ -39,11 +42,9 @@ def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
     """Fetch data and calculate momentum, volatility, and RSI (for GOLD)."""
     for attempt in range(retries):
         try:
-            # Use yf.download for robustness
             hist_data = yf.download(ticker, period=period, interval=interval, progress=False)
             
             if hist_data.empty or len(hist_data) < 5:
-                print(f"    [FAIL] Data too short for {ticker}. Attempt {attempt + 1}")
                 continue
 
             current_price = hist_data["Close"].iloc[-1]
@@ -59,7 +60,7 @@ def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
 
             # --- RSI CALCULATION (for GOLD only) ---
             current_rsi = None
-            if ticker == TICKERS["GOLD"] or ticker == "GLD": # Include fallback ticker
+            if ticker == TICKERS["GOLD"] or ticker == "GLD": 
                 period_rsi = 14
                 delta = hist_data["Close"].diff()
                 gain = delta.where(delta > 0, 0)
@@ -70,6 +71,7 @@ def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
                 rsi_value = 100 - (100 / (1 + rs))
                 current_rsi = rsi_value.iloc[-1]
 
+            # Return scalar values
             return current_price, momentum, volatility, current_rsi
             
         except Exception as e:
@@ -82,7 +84,7 @@ def calculate_composite_score(results):
     """Calculate weighted composite score with tighter momentum scaling."""
     # Define (Value, Min Range, Max Range, Weight)
     inputs = {
-        # Levels and Volatility (Weights remain unchanged)
+        # Levels and Volatility 
         "VIX_Level": (results.get("VIX_Current"), 10, 50, 0.10),
         "VIX_Volatility": (results.get("VIX_Volatility"), 0, 40, 0.05),
         "GVZ_Level": (results.get("GVZ_Current"), 10, 40, 0.15),
@@ -92,7 +94,7 @@ def calculate_composite_score(results):
         "GOLD_Level": (results.get("GOLD_Current"), 1800, 3000, 0.02), 
         "GOLD_Volatility": (results.get("GOLD_Volatility"), 0, 25, 0.05),
         
-        # MOMENTUM (Tighter Scaling for Mean-Reversion Sensitivity)
+        # MOMENTUM (Tighter Scaling)
         "VIX_Momentum": (results.get("VIX_Momentum"), -5.0, 5.0, 0.05),
         "GVZ_Momentum": (results.get("GVZ_Momentum"), -5.0, 5.0, 0.10),
         "DXY_Momentum": (results.get("DXY_Momentum"), -3.0, 3.0, 0.05),
@@ -103,8 +105,9 @@ def calculate_composite_score(results):
     return round(score, 2)
 
 # ==============================
-# 2. UPLOAD TO GITHUB VIA API (BORROWED)
+# 2. GITHUB API LOGIC
 # ==============================
+
 def upload_file_to_github(file_path, file_content, commit_message):
     """Upload or update a file in GitHub repository."""
     if not GITHUB_TOKEN:
@@ -140,12 +143,13 @@ def upload_file_to_github(file_path, file_content, commit_message):
 # ==============================
 # 3. PREDICTIVE BIAS GENERATOR (ENHANCED)
 # ==============================
+
 def generate_predictive_bias(results, current_score):
     """Generate trading bias using dynamic momentum/mean-reversion and RSI filter."""
     scores = []
     slope = 0
     
-    # [Code for fetching historical scores.csv remains unchanged]
+    # --- Fetch Historical Scores for Slope Calculation ---
     try:
         url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/{SCORES_FILE}"
         response = requests.get(url, timeout=10)
@@ -158,18 +162,18 @@ def generate_predictive_bias(results, current_score):
                 recent = np.mean(scores[-3:])
                 prior = np.mean(scores[-6:-3])
                 slope = recent - prior
-                print(f"✅ Historical slope calculated: {slope:.2f}")
+                print(f"  Slope calculated: {slope:.2f}")
             
     except Exception:
-        pass # Silence error if scores.csv doesn't exist yet
+        pass
 
     # --- MEAN-REVERSION FACTOR ---
-    if current_score > 80: # Overbought/Extreme Risk-Off
-        slope_multiplier = -2.0  # Reverse slope impact (FADE the move)
-    elif current_score < 20: # Oversold/Extreme Risk-On
-        slope_multiplier = -2.0  # Reverse slope impact (FADE the move)
+    if current_score > 80: 
+        slope_multiplier = -2.0  # FADE the move
+    elif current_score < 20: 
+        slope_multiplier = -2.0  # FADE the move
     else:
-        slope_multiplier = 2.0   # Neutral Zone (FOLLOW the trend)
+        slope_multiplier = 2.0   # FOLLOW the trend
         
     
     # --- DYNAMIC BOOSTS ---
@@ -224,15 +228,11 @@ def generate_predictive_bias(results, current_score):
     if current_gold_price is None or current_gold_price == 0:
         suggested_sl_points = 15.0 # Fallback risk
     else:
-        # Time scale factor for 30m intervals
         time_scale_factor = np.sqrt(252 * 13) 
-        # Calculate Risk_Points = Price * Volatility * Safety_Factor(4.0) / Time_Scale_Factor
         risk_points = current_gold_price * (gold_vol_annual / 100) / time_scale_factor * 4.0 
-        
         suggested_sl_points = round(max(5.0, risk_points), 1) 
         
-    # Final Bias/Action Output
-    print(f"🎯 Final Action: {action} (Bias: {bias:+.1f} | SL: {suggested_sl_points:.1f} pts)")
+    print(f"  Final Action: {action} (Bias: {bias:+.1f} | SL: {suggested_sl_points:.1f} pts)")
 
     return {
         "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -241,11 +241,11 @@ def generate_predictive_bias(results, current_score):
         "confidence": min(95, 60 + abs(bias) * 3),
         "action": action,
         "projected_move_pct": round(bias * 0.22, 1),
-        "suggested_sl_points": suggested_sl_points # NEW PARAMETER
+        "suggested_sl_points": suggested_sl_points 
     }
 
 # ==============================
-# 4. MAIN EXECUTION (BORROWED & MODIFIED)
+# 4. MAIN EXECUTION (CORRECTED FOR TYPE ERROR)
 # ==============================
 def main():
     print("=" * 60)
@@ -257,9 +257,9 @@ def main():
     print("\n📊 Fetching market data...")
     for key, ticker in TICKERS.items():
         print(f"  → {key} ({ticker})...", end=" ")
-        current, mom, vol, rsi = fetch_financial_data(ticker)
+        current, mom, vol, rsi = fetch_financial_data(ticker) 
         
-        # Fallback tickers (borrowed from your original)
+        # Fallback tickers 
         if key == "VIX" and current is None:
             print("fallback to VXX...", end=" ")
             current, mom, vol, rsi = fetch_financial_data("VXX")
@@ -268,16 +268,27 @@ def main():
             current, mom, vol, rsi = fetch_financial_data("GLD")
             
         if current is not None:
-            results[f"{key}_Current"] = current
-            results[f"{key}_Momentum"] = mom
-            results[f"{key}_Volatility"] = vol
-            if rsi is not None:
-                 results[f"{key}_RSI"] = rsi
-            print(f"✓ (Price: {current:.2f}, Mom: {mom:+.2f}%)")
+            
+            # --- FIX: SAFELY EXTRACT SCALAR VALUES ---
+            # This ensures we handle any unexpected Series return from yfinance 
+            # and prevents the TypeError.
+            safe_current = np.array(current).item()
+            safe_mom = np.array(mom).item()
+            safe_vol = np.array(vol).item()
+            safe_rsi = np.array(rsi).item() if rsi is not None else None
+            
+            # Store safe scalars in results dictionary
+            results[f"{key}_Current"] = safe_current
+            results[f"{key}_Momentum"] = safe_mom
+            results[f"{key}_Volatility"] = safe_vol
+            if safe_rsi is not None:
+                 results[f"{key}_RSI"] = safe_rsi
+                 
+            print(f"✓ (Price: {safe_current:.2f}, Mom: {safe_mom:+.2f}%)")
         else:
             print("✗ FAILED")
         
-        time.sleep(1) # Be kind to yfinance API
+        time.sleep(1) 
 
     # Calculate composite score
     composite = calculate_composite_score(results)
@@ -295,13 +306,11 @@ def main():
         
         if response.status_code == 200:
             existing_df = pd.read_csv(StringIO(response.text))
-            print(f"  📖 Loaded {len(existing_df)} existing readings")
         else:
             existing_df = pd.DataFrame()
     except Exception:
         existing_df = pd.DataFrame()
 
-    # Create current reading (ensuring column order for consistency)
     current_data = {
         'Timestamp': current_time_str,
         'VIX_Current': results.get('VIX_Current'),
@@ -320,7 +329,7 @@ def main():
     }
     current_reading = pd.DataFrame([current_data])
 
-    df_legacy = pd.concat([existing_df, current_reading], ignore_index=True).tail(48) # Keep last 48 readings
+    df_legacy = pd.concat([existing_df, current_reading], ignore_index=True).tail(48)
     
     scores_content = df_legacy.to_csv(index=False)
     if upload_file_to_github(SCORES_FILE, scores_content, f"Score Update - {current_time_str}"):
