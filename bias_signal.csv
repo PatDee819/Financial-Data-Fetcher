@@ -1,2 +1,2 @@
-timestamp,bias,strength,confidence,action,projected_move_pct
-2025-11-19 04:42:51,BULL,0.2,60.48000000000003,FLAT,0.0
+timestamp,bias,strength,confidence,action,projected_move_pct,suggested_sl_points
+2025-11-19 06:50:18,NEUTRAL,0.0,60.0,FLAT,0.0,42.0
