@@ -17,8 +17,8 @@ import os
 #    OR replace the line below with your actual token (not recommended for security).
 GITHUB_TOKEN = os.getenv("GH_TOKEN")  # Reads from environment variable (RECOMMENDED)
 # GITHUB_TOKEN = "YOUR_PERSONAL_ACCESS_TOKEN_HERE"  # UNCOMMENT and use if not using env var
-REPO_OWNER = "PatDee819"  # <<< CONFIRMED FROM YOUR URL: PatDee819
-REPO_NAME = "Financial-Data-Fetcher"  # <<< CONFIRMED FROM YOUR URL
+REPO_OWNER = "PatDee819"
+REPO_NAME = "Financial-Data-Fetcher"
 BRANCH = "main"
 
 TICKERS = {
@@ -111,7 +111,7 @@ def calculate_composite_score(results):
 
 def upload_file_to_github(file_path, file_content, commit_message):
     """Upload or update a file in GitHub repository."""
-    # FIX: Check both environment variable and placeholder for the token
+    
     if not GITHUB_TOKEN or GITHUB_TOKEN in ["YOUR_GITHUB_TOKEN_HERE", "YOUR_PERSONAL_ACCESS_TOKEN_HERE"]:
         print("❌ Error: GITHUB_TOKEN is missing or empty. Cannot upload to GitHub.")
         return False
@@ -173,10 +173,10 @@ def generate_predictive_bias(results, current_score):
                 slope = recent - prior
                 print(f"  Slope calculated: {slope:.2f}")
             
-        except Exception as e:
-            # FIX: Added error printing to see why fetching scores fails
-            print(f"⚠️ Warning: Failed to fetch scores.csv for slope calculation: {e}")
-            pass
+    # CRITICAL FIX: Ensure the exception is not nested or ambiguous.
+    except Exception as e:
+        print(f"⚠️ Warning: Failed to fetch scores.csv for slope calculation: {e}")
+        pass
 
     # --- MEAN-REVERSION FACTOR ---
     if current_score > 80:
@@ -267,7 +267,7 @@ def main():
     if not GITHUB_TOKEN or GITHUB_TOKEN in ["YOUR_GITHUB_TOKEN_HERE", "YOUR_PERSONAL_ACCESS_TOKEN_HERE"]:
         print("!!! CRITICAL FAILURE !!!")
         print("GITHUB_TOKEN is NOT set or is still a placeholder. Check line 14.")
-        print(f"Please set the GH_TOKEN environment variable or manually update the script.")
+        print("Please set the GH_TOKEN environment variable or manually update the script.")
         print("EXECUTION HALTED.")
         print("=" * 60)
         return
@@ -290,7 +290,6 @@ def main():
         if current is not None:
             
             # --- FIX: SAFELY EXTRACT SCALAR VALUES ---
-            # This ensures we handle any unexpected Series return from yfinance
             safe_current = np.array(current).item()
             safe_mom = np.array(mom).item()
             safe_vol = np.array(vol).item()
@@ -319,7 +318,6 @@ def main():
     print("\n💾 Updating scores.csv...")
     current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    # CRITICAL FIX: Use configured REPO_OWNER/REPO_NAME for fetching scores.csv
     try:
         url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/{SCORES_FILE}"
         response = requests.get(url, timeout=10)
@@ -372,7 +370,6 @@ def main():
         print(f"    → Action: {signal['action']}")
         print(f"    → SL Points: {signal['suggested_sl_points']:+.1f}")
     else:
-        # FIX: This block will now print the full API error from the upload_file_to_github function
         print("  ❌ Failed to upload bias_signal.csv - SEE API ERROR ABOVE")
 
     print("\n" + "=" * 60)
