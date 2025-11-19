@@ -15,7 +15,7 @@ import os
 # ⚠️ ACTION REQUIRED: REPLACE PLACEHOLDERS
 # 1. Ensure your GITHUB_TOKEN is set as an environment variable (GH_TOKEN) 
 #    OR replace the line below with your actual token (not recommended for security).
-GITHUB_TOKEN = os.getenv("GH_TOKEN")  # Reads from environment variable (RECOMMENDED)
+GITHUB_TOKEN = os.getenv("GH_TOKEN")# Reads from environment variable (RECOMMENDED)
 # GITHUB_TOKEN = "YOUR_PERSONAL_ACCESS_TOKEN_HERE"  # UNCOMMENT and use if not using env var
 REPO_OWNER = "PatrickDemba" # <<< REPLACED WITH YOUR USERNAME
 REPO_NAME = "Financial-Data-Fetcher" # <<< REPLACED WITH YOUR REPO NAME
