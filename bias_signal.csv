@@ -1,2 +1,2 @@
 timestamp,bias,strength,confidence,action,projected_move_pct,suggested_sl_points,position_size_factor
-2025-11-20 22:09:27,NEUTRAL,0.0,60.0,FLAT,0.0,23.1,1.0
+2025-11-20 22:36:23,BEAR,15.3,95,SHORT,-3.4,23.1,2.0
