@@ -77,25 +77,24 @@ def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
 def calculate_composite_score(results):
     """
     Calculate weighted composite score.
-    🔧 FIX: Reduced GVZ weight to minimize circular logic (5% total, was 15%)
     """
     
     inputs = {
         # LEVELS AND VOLATILITY (Total Weight: 0.44)
-        "VIX_Level": (results.get("VIX_Current"), 10, 50, 0.12),      # Increased
+        "VIX_Level": (results.get("VIX_Current"), 10, 50, 0.12),
         "VIX_Volatility": (results.get("VIX_Volatility"), 0, 40, 0.05),
-        "GVZ_Level": (results.get("GVZ_Current"), 10, 40, 0.03),      # 🔧 REDUCED from 0.10
-        "GVZ_Volatility": (results.get("GVZ_Volatility"), 0, 40, 0.02), # 🔧 REDUCED from 0.05
-        "DXY_Level": (results.get("DXY_Current"), 80, 120, 0.12),     # Increased
+        "GVZ_Level": (results.get("GVZ_Current"), 10, 40, 0.03),
+        "GVZ_Volatility": (results.get("GVZ_Volatility"), 0, 40, 0.02),
+        "DXY_Level": (results.get("DXY_Current"), 80, 120, 0.12),
         "DXY_Volatility": (results.get("DXY_Volatility"), 0, 30, 0.05),
         "GOLD_Level": (results.get("GOLD_Current"), 1800, 3000, 0.02),
         "GOLD_Volatility": (results.get("GOLD_Volatility"), 0, 25, 0.03),
         
         # MOMENTUM (Total Weight: 0.56)
-        "VIX_Momentum": (results.get("VIX_Momentum"), -5.0, 5.0, 0.10), # Increased
-        "GVZ_Momentum": (results.get("GVZ_Momentum"), -5.0, 5.0, 0.02), # 🔧 REDUCED from 0.10
-        "DXY_Momentum": (results.get("DXY_Momentum"), -3.0, 3.0, 0.08), # Increased
-        "GOLD_Momentum": (results.get("GOLD_Momentum"), -1.0, 1.0, 0.36), # Slightly increased
+        "VIX_Momentum": (results.get("VIX_Momentum"), -5.0, 5.0, 0.10),
+        "GVZ_Momentum": (results.get("GVZ_Momentum"), -5.0, 5.0, 0.02),
+        "DXY_Momentum": (results.get("DXY_Momentum"), -3.0, 3.0, 0.08),
+        "GOLD_Momentum": (results.get("GOLD_Momentum"), -1.0, 1.0, 0.36),
     }
     
     score = sum(normalize_value(v, minv, maxv) * w for v, minv, maxv, w in inputs.values() if v is not None)
@@ -144,13 +143,13 @@ def upload_file_to_github(file_path, file_content, commit_message):
         return False
 
 # ==============================
-# 3. PREDICTIVE BIAS GENERATOR (ENHANCED v2.1)
+# 3. PREDICTIVE BIAS GENERATOR (ENHANCED v2.2 - Protective Logic)
 # ==============================
 
 def generate_predictive_bias(results, current_score):
     """
-    Generate trading bias with signal invalidation logic.
-    🔧 FIX: Added trade invalidation when strength collapses after entry
+    Generate trading bias with PROTECTIVE signal invalidation logic.
+    Updated for tighter reversal detection (Option A-).
     """
     scores = []
     slope = 0.0
@@ -173,7 +172,7 @@ def generate_predictive_bias(results, current_score):
                 slope = coefficients[1]
                 print(f"  Linear Regression Slope calculated: {slope:.3f}")
                 
-        # 🔧 NEW: Fetch last signal from bias_signal.csv for invalidation check
+        # Fetch last signal from bias_signal.csv for invalidation check
         signal_url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/bias_signal.csv"
         signal_response = requests.get(signal_url, timeout=10)
         
@@ -194,8 +193,7 @@ def generate_predictive_bias(results, current_score):
         print(f"⚠️ Warning: Failed to fetch historical data: {e}")
         pass
 
-    # --- MEAN-REVERSION FACTOR (Simplified - Less Aggressive) ---
-    # 🔧 FIX: Only fade at EXTREME levels (>90 or <10), follow momentum elsewhere
+    # --- MEAN-REVERSION FACTOR ---
     if current_score > 90:
         slope_multiplier = -1.5  # Fade extreme bullishness
     elif current_score < 10:
@@ -224,7 +222,7 @@ def generate_predictive_bias(results, current_score):
     else:
         action = "FLAT"
 
-    # --- 🔧 NEW: SIGNAL INVALIDATION LOGIC ---
+    # --- 🔧 UPDATED: SIGNAL INVALIDATION LOGIC (PROTECTIVE) ---
     # If we had a recent active signal (LONG/SHORT) and strength has collapsed, invalidate trade
     invalidation_triggered = False
     
@@ -233,16 +231,16 @@ def generate_predictive_bias(results, current_score):
         strength_decay = last_strength - current_strength
         
         # Invalidate if:
-        # 1. Strength dropped by more than 4.0 points, OR
-        # 2. Current strength is now below 2.0 (weak signal)
-        if strength_decay > 4.0 or current_strength < 2.0:
+        # 1. Strength dropped by more than 3.0 points (Was 4.0) - Catches Reversals Faster
+        # 2. OR Current strength is now below 2.5 (Was 2.0) - Filters Weak Signals
+        if strength_decay > 3.0 or current_strength < 2.5:
             action = "FLAT"
             bias = 0.0
             invalidation_triggered = True
-            print(f"  🚨 SIGNAL INVALIDATION TRIGGERED:")
-            print(f"     Last: {last_action} @ {last_strength:.1f} strength")
-            print(f"     Now: {current_strength:.1f} strength (decay: -{strength_decay:.1f})")
-            print(f"     → Forcing FLAT to close position")
+            print(f"  🚨 PROTECTIVE EXIT TRIGGERED (Reversal Detected):")
+            print(f"      Last: {last_action} @ {last_strength:.1f} strength")
+            print(f"      Now: {current_strength:.1f} strength (decay: -{strength_decay:.1f})")
+            print(f"      → Forcing FLAT to close position immediately.")
 
     # --- RSI Confirmation Filter ---
     gold_rsi = results.get("GOLD_RSI")
@@ -266,11 +264,11 @@ def generate_predictive_bias(results, current_score):
     current_gold_price = results.get("GOLD_Current")
     
     if current_gold_price is None or current_gold_price == 0:
-        suggested_sl_points = 20.0  # 🔧 INCREASED from 15.0 (safer fallback)
+        suggested_sl_points = 20.0 
     else:
         time_scale_factor = np.sqrt(252 * 13)
         risk_points = current_gold_price * (gold_vol_annual / 100) / time_scale_factor * 2.5
-        suggested_sl_points = round(max(20.0, risk_points), 1)  # 🔧 INCREASED minimum from 5.0 to 20.0
+        suggested_sl_points = round(max(20.0, risk_points), 1)
         
     # --- Position Sizing Factor ---
     scaled_strength = min(abs(bias), 6.0)
@@ -296,13 +294,12 @@ def generate_predictive_bias(results, current_score):
 # ==============================
 def main():
     print("=" * 60)
-    print("🚀 FINANCIAL DATA FETCHER - STARTED (V2.1 - Signal Invalidation)")
+    print("🚀 FINANCIAL DATA FETCHER - STARTED (V2.2 - Protective Logic)")
     print("=" * 60)
     
     if not GITHUB_TOKEN or GITHUB_TOKEN in ["YOUR_GITHUB_TOKEN_HERE", "YOUR_PERSONAL_ACCESS_TOKEN_HERE"]:
         print("!!! CRITICAL FAILURE !!!")
-        print("GITHUB_TOKEN is NOT set or is still a placeholder. Check line 14.")
-        print("Please set the GH_TOKEN environment variable or manually update the script.")
+        print("GITHUB_TOKEN is NOT set. Check environment variables.")
         print("EXECUTION HALTED.")
         print("=" * 60)
         return
@@ -399,7 +396,7 @@ def main():
         print(f"  ✅ bias_signal.csv uploaded")
         print(f"    → Action: {signal['action']}")
         print(f"    → SL Points: {signal['suggested_sl_points']:+.1f}")
-        print(f"    → Position Size Factor: {signal['position_size_factor']:.2f} (Use for risk scaling)")
+        print(f"    → Position Size Factor: {signal['position_size_factor']:.2f}")
     else:
         print("  ❌ Failed to upload bias_signal.csv - SEE API ERROR ABOVE")
 
