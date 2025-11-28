@@ -27,6 +27,22 @@ TICKERS = {
 SCORES_FILE = "scores.csv"
 
 # ==============================
+# NEW: TIME-OF-DAY FILTER (Phase 1, #2)
+# ==============================
+def is_valid_trading_time():
+    """
+    Avoid low-liquidity Asian session hours: 00:00-03:59 UTC and 21:00-23:59 UTC
+    (Assumes execution environment is running in UTC)
+    """
+    current_hour = datetime.now().hour # UTC hour
+    
+    # Avoid 00:00-03:59 UTC (dead Asian) and 21:00-23:59 UTC (post-NY close)
+    if 0 <= current_hour < 4 or current_hour >= 21:
+        return False
+    return True
+
+
+# ==============================
 # 1. FETCH & COMPOSITE FUNCTIONS
 # ==============================
 
@@ -37,7 +53,9 @@ def normalize_value(value, min_val, max_val):
     return max(0, min(100, ((value - min_val) / (max_val - min_val)) * 100))
 
 def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
-    """Fetch data and calculate momentum, volatility, and RSI (for GOLD)."""
+    """
+    Fetch data and calculate momentum, volatility, RSI (for GOLD), and Volume Ratio (for GOLD).
+    """ # ⬅️ Updated documentation
     for attempt in range(retries):
         try:
             hist_data = yf.download(ticker, period=period, interval=interval, progress=False)
@@ -55,7 +73,10 @@ def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
             volatility = daily_volatility * 100
 
             current_rsi = None
+            volume_ratio = 1.0 # ⬅️ Initialize Volume Ratio
+
             if ticker == TICKERS["GOLD"] or ticker == "GLD":
+                # --- RSI Calculation ---
                 period_rsi = 14
                 delta = hist_data["Close"].diff()
                 gain = delta.where(delta > 0, 0)
@@ -65,14 +86,22 @@ def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
                 rs = avg_gain / avg_loss.replace(0, 1e-10) 
                 rsi_value = 100 - (100 / (1 + rs))
                 current_rsi = rsi_value.iloc[-1]
+                
+                # --- NEW: Volume Ratio Calculation for GOLD ---
+                if 'Volume' in hist_data.columns and not hist_data['Volume'].empty:
+                    current_volume = hist_data["Volume"].iloc[-1]
+                    avg_volume = hist_data["Volume"].mean()
+                    volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
 
-            return current_price, momentum, volatility, current_rsi
+            # 🛑 IMPORTANT: Now returns 5 values (including volume_ratio)
+            return current_price, momentum, volatility, current_rsi, volume_ratio
             
         except Exception as e:
             print(f"⚠️ Attempt {attempt + 1} failed for {ticker}: {e}")
             time.sleep(2 ** attempt)
             
-    return None, None, None, None
+    # 🛑 IMPORTANT: Returns 5 None values on failure
+    return None, None, None, None, None
 
 def calculate_composite_score(results):
     """
@@ -143,18 +172,28 @@ def upload_file_to_github(file_path, file_content, commit_message):
         return False
 
 # ==============================
-# 3. PREDICTIVE BIAS GENERATOR (ENHANCED v2.3 - TIGHTENED INVALIDATION)
+# 3. PREDICTIVE BIAS GENERATOR (ENHANCED v2.4 - Time/Volume Filters)
 # ==============================
 
 def generate_predictive_bias(results, current_score):
     """
-    Generate trading bias with TIGHTENED PROTECTIVE signal invalidation logic.
-    
-    KEY CHANGES IN v2.3:
-    - Invalidation trigger lowered from 3.0 to 2.0 strength decay
-    - Current strength threshold raised from 2.5 to 3.0
-    - More aggressive reversal detection to prevent whipsaw losses
+    Generate trading bias with Time-of-Day and Volume Confirmation filters.
     """
+    
+    # 🛑 NEW: TIME-OF-DAY FILTER (Phase 1, #2)
+    if not is_valid_trading_time():
+        print(f"  ⏰ LOW liquidity hours detected (UTC {datetime.now().hour:02}:00) - Signal suppressed")
+        return {
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "bias": "NEUTRAL",
+            "strength": 0.0,
+            "confidence": 0,
+            "action": "FLAT",
+            "projected_move_pct": 0.0,
+            "suggested_sl_points": 0.0,
+            "position_size_factor": 0.0
+        }
+
     scores = []
     slope = 0.0
     last_action = None
@@ -172,7 +211,7 @@ def generate_predictive_bias(results, current_score):
 
             if len(scores) >= 5:
                 x = np.arange(len(scores))
-                coefficients = polyfit(x, scores, 1) 
+                coefficients = polyfit(x, scores, 1)  
                 slope = coefficients[1]
                 print(f"  Linear Regression Slope calculated: {slope:.3f}")
                 
@@ -215,22 +254,43 @@ def generate_predictive_bias(results, current_score):
     elif vix_mom < -1.0 and dxy_mom > 0.5: 
         boost1 = -3.0
 
-    bias = (slope * slope_multiplier * 10) + boost1
+    initial_bias = (slope * slope_multiplier * 10) + boost1 # ⬅️ Renamed variable
     
     strength_threshold = 3.0
     
-    if bias > strength_threshold:
+    if initial_bias > strength_threshold:
         action = "LONG"
-    elif bias < -strength_threshold:
+    elif initial_bias < -strength_threshold:
         action = "SHORT"
     else:
         action = "FLAT"
+        
+    bias = initial_bias # ⬅️ Initialize final bias
+
+    # --- NEW: VOLUME CONFIRMATION (Phase 2, #7) ---
+    volume_ratio = results.get("GOLD_VolumeRatio", 1.0)
+    multiplier = 1.0
+    
+    if volume_ratio < 0.7:  # Low volume = weak signal
+        multiplier = 0.7
+        print(f"  📊 Volume penalty: {volume_ratio:.2f}x avg (bias reduced by 30%)")
+    elif volume_ratio > 1.5:  # High volume = strong signal
+        multiplier = 1.15
+        print(f"  📊 Volume boost: {volume_ratio:.2f}x avg (bias enhanced by 15%)")
+        
+    bias *= multiplier # ⬅️ Apply the volume multiplier to the bias
+    
+    # 🛑 Re-evaluate action based on new, adjusted bias
+    if action != "FLAT":
+        if abs(bias) < strength_threshold:
+             print(f"  📉 Volume filter demoted signal to FLAT (Adjusted bias: {bias:+.1f})")
+             action = "FLAT"
+             bias = 0.0
+    # -----------------------------------------------
+
 
     # --- 🔧 V2.3 UPDATE: TIGHTENED SIGNAL INVALIDATION LOGIC ---
-    # CRITICAL CHANGES:
-    # 1. Strength decay threshold: 3.0 → 2.0 (catches reversals 33% faster)
-    # 2. Current strength threshold: 2.5 → 3.0 (filters weaker signals)
-    
+    # NOTE: This check now operates on the volume-adjusted 'bias'
     invalidation_triggered = False
     
     if last_action in ["LONG", "SHORT"] and time_since_signal < 14400:  # Within last 4 hours
@@ -238,9 +298,6 @@ def generate_predictive_bias(results, current_score):
         strength_decay = last_strength - current_strength
         
         # NEW TIGHTENED THRESHOLDS (v2.3):
-        # Invalidate if:
-        # 1. Strength dropped by more than 2.0 points (was 3.0) - 33% MORE SENSITIVE
-        # 2. OR Current strength is now below 3.0 (was 2.5) - STRONGER FILTER
         if strength_decay > 2.0 or current_strength < 3.0:
             action = "FLAT"
             bias = 0.0
@@ -304,8 +361,9 @@ def generate_predictive_bias(results, current_score):
 def main():
     print("=" * 60)
     print("🚀 FINANCIAL DATA FETCHER - STARTED")
-    print("📌 VERSION: v2.3 - Tightened Invalidation (2.0 Decay)")
-    print("🔧 CHANGES: Strength decay 3.0→2.0 | Min strength 2.5→3.0")
+    # ⬅️ Updated Version and Change Log
+    print("📌 VERSION: v2.4 - Time-of-Day and Volume Filters ADDED")
+    print("🔧 CHANGES: Time Filter (00-04, 21-23 UTC) | Volume Confirmation")
     print("=" * 60)
     
     if not GITHUB_TOKEN or GITHUB_TOKEN in ["YOUR_GITHUB_TOKEN_HERE", "YOUR_PERSONAL_ACCESS_TOKEN_HERE"]:
@@ -320,27 +378,35 @@ def main():
     print("\n📊 Fetching market data...")
     for key, ticker in TICKERS.items():
         print(f"  → {key} ({ticker})...", end=" ")
-        current, mom, vol, rsi = fetch_financial_data(ticker)
+        # 🛑 UPDATED CALL: Now expecting 5 return values
+        current, mom, vol, rsi, volume_ratio = fetch_financial_data(ticker) 
         
         if key == "VIX" and current is None:
             print("fallback to VXX...", end=" ")
-            current, mom, vol, rsi = fetch_financial_data("VXX")
+            # 🛑 UPDATED FALLBACK: Now expecting 5 return values
+            current, mom, vol, rsi, volume_ratio = fetch_financial_data("VXX")
         if key == "GOLD" and current is None:
             print("fallback to GLD...", end=" ")
-            current, mom, vol, rsi = fetch_financial_data("GLD")
+            # 🛑 UPDATED FALLBACK: Now expecting 5 return values
+            current, mom, vol, rsi, volume_ratio = fetch_financial_data("GLD")
             
         if current is not None:
             safe_current = current.item() if hasattr(current, 'item') else current
             safe_mom = mom.item() if hasattr(mom, 'item') else mom
             safe_vol = vol.item() if hasattr(vol, 'item') else vol
             safe_rsi = rsi.item() if hasattr(rsi, 'item') else rsi if rsi is not None else None
+            # 🛑 NEW: Safely cast Volume Ratio
+            safe_volume_ratio = volume_ratio.item() if hasattr(volume_ratio, 'item') else volume_ratio
             
             results[f"{key}_Current"] = safe_current
             results[f"{key}_Momentum"] = safe_mom
             results[f"{key}_Volatility"] = safe_vol
             if safe_rsi is not None:
                 results[f"{key}_RSI"] = safe_rsi
-                            
+            # 🛑 NEW: Store Volume Ratio in results for GOLD (will be 1.0 for others)
+            if key == "GOLD":
+                 results[f"{key}_VolumeRatio"] = safe_volume_ratio 
+                    
             print(f"✓ (Price: {safe_current:.2f}, Mom: {safe_mom:+.2f}%)")
         else:
             print("✗ FAILED")
@@ -383,6 +449,8 @@ def main():
         'GOLD_Current': results.get('GOLD_Current'),
         'GOLD_Momentum': results.get('GOLD_Momentum'),
         'GOLD_Volatility': results.get('GOLD_Volatility'),
+        # 🛑 NEW: Add Volume Ratio to the scores log
+        'GOLD_VolumeRatio': results.get('GOLD_VolumeRatio'), 
         'Composite_Score': composite
     }
     current_reading = pd.DataFrame([current_data])
@@ -396,12 +464,12 @@ def main():
     # ==============================
     # GENERATE bias_signal.csv
     # ==============================
-    print("\n🎯 Generating trading bias (v2.3 - Tightened Logic)...")
+    print("\n🎯 Generating trading bias (v2.4 - Time/Volume Filters)...")
     signal = generate_predictive_bias(results, composite)
     signal_df = pd.DataFrame([signal])
     bias_content = signal_df.to_csv(index=False)
     
-    success = upload_file_to_github("bias_signal.csv", bias_content, f"Signal Update v2.3 - {current_time_str}")
+    success = upload_file_to_github("bias_signal.csv", bias_content, f"Signal Update v2.4 - {current_time_str}")
     
     if success:
         print(f"  ✅ bias_signal.csv uploaded")
@@ -413,8 +481,8 @@ def main():
         print("  ❌ Failed to upload bias_signal.csv - SEE API ERROR ABOVE")
 
     print("\n" + "=" * 60)
-    print("✅ EXECUTION COMPLETED (v2.3)")
-    print("🔧 Active: 2.0 strength decay threshold + 3.0 min strength")
+    print("✅ EXECUTION COMPLETED (v2.4)")
+    print("🔧 Active: Time Filter + Volume Confirmation")
     print("=" * 60)
 
 if __name__ == "__main__":
