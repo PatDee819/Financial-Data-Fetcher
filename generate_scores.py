@@ -143,13 +143,17 @@ def upload_file_to_github(file_path, file_content, commit_message):
         return False
 
 # ==============================
-# 3. PREDICTIVE BIAS GENERATOR (ENHANCED v2.2 - Protective Logic)
+# 3. PREDICTIVE BIAS GENERATOR (ENHANCED v2.3 - TIGHTENED INVALIDATION)
 # ==============================
 
 def generate_predictive_bias(results, current_score):
     """
-    Generate trading bias with PROTECTIVE signal invalidation logic.
-    Updated for tighter reversal detection (Option A-).
+    Generate trading bias with TIGHTENED PROTECTIVE signal invalidation logic.
+    
+    KEY CHANGES IN v2.3:
+    - Invalidation trigger lowered from 3.0 to 2.0 strength decay
+    - Current strength threshold raised from 2.5 to 3.0
+    - More aggressive reversal detection to prevent whipsaw losses
     """
     scores = []
     slope = 0.0
@@ -222,24 +226,29 @@ def generate_predictive_bias(results, current_score):
     else:
         action = "FLAT"
 
-    # --- 🔧 UPDATED: SIGNAL INVALIDATION LOGIC (PROTECTIVE) ---
-    # If we had a recent active signal (LONG/SHORT) and strength has collapsed, invalidate trade
+    # --- 🔧 V2.3 UPDATE: TIGHTENED SIGNAL INVALIDATION LOGIC ---
+    # CRITICAL CHANGES:
+    # 1. Strength decay threshold: 3.0 → 2.0 (catches reversals 33% faster)
+    # 2. Current strength threshold: 2.5 → 3.0 (filters weaker signals)
+    
     invalidation_triggered = False
     
     if last_action in ["LONG", "SHORT"] and time_since_signal < 14400:  # Within last 4 hours
         current_strength = abs(bias)
         strength_decay = last_strength - current_strength
         
+        # NEW TIGHTENED THRESHOLDS (v2.3):
         # Invalidate if:
-        # 1. Strength dropped by more than 3.0 points (Was 4.0) - Catches Reversals Faster
-        # 2. OR Current strength is now below 2.5 (Was 2.0) - Filters Weak Signals
-        if strength_decay > 3.0 or current_strength < 2.5:
+        # 1. Strength dropped by more than 2.0 points (was 3.0) - 33% MORE SENSITIVE
+        # 2. OR Current strength is now below 3.0 (was 2.5) - STRONGER FILTER
+        if strength_decay > 2.0 or current_strength < 3.0:
             action = "FLAT"
             bias = 0.0
             invalidation_triggered = True
-            print(f"  🚨 PROTECTIVE EXIT TRIGGERED (Reversal Detected):")
+            print(f"  🚨 PROTECTIVE EXIT TRIGGERED (v2.3 - Tightened 2.0 Decay):")
             print(f"      Last: {last_action} @ {last_strength:.1f} strength")
             print(f"      Now: {current_strength:.1f} strength (decay: -{strength_decay:.1f})")
+            print(f"      Threshold: 2.0 decay OR <3.0 strength (TIGHTENED)")
             print(f"      → Forcing FLAT to close position immediately.")
 
     # --- RSI Confirmation Filter ---
@@ -294,7 +303,9 @@ def generate_predictive_bias(results, current_score):
 # ==============================
 def main():
     print("=" * 60)
-    print("🚀 FINANCIAL DATA FETCHER - STARTED (V2.2 - Protective Logic)")
+    print("🚀 FINANCIAL DATA FETCHER - STARTED")
+    print("📌 VERSION: v2.3 - Tightened Invalidation (2.0 Decay)")
+    print("🔧 CHANGES: Strength decay 3.0→2.0 | Min strength 2.5→3.0")
     print("=" * 60)
     
     if not GITHUB_TOKEN or GITHUB_TOKEN in ["YOUR_GITHUB_TOKEN_HERE", "YOUR_PERSONAL_ACCESS_TOKEN_HERE"]:
@@ -385,23 +396,25 @@ def main():
     # ==============================
     # GENERATE bias_signal.csv
     # ==============================
-    print("\n🎯 Generating trading bias...")
+    print("\n🎯 Generating trading bias (v2.3 - Tightened Logic)...")
     signal = generate_predictive_bias(results, composite)
     signal_df = pd.DataFrame([signal])
     bias_content = signal_df.to_csv(index=False)
     
-    success = upload_file_to_github("bias_signal.csv", bias_content, f"Signal Update - {current_time_str}")
+    success = upload_file_to_github("bias_signal.csv", bias_content, f"Signal Update v2.3 - {current_time_str}")
     
     if success:
         print(f"  ✅ bias_signal.csv uploaded")
         print(f"    → Action: {signal['action']}")
-        print(f"    → SL Points: {signal['suggested_sl_points']:+.1f}")
+        print(f"    → Strength: {signal['strength']:.1f}")
+        print(f"    → SL Points: {signal['suggested_sl_points']:.1f}")
         print(f"    → Position Size Factor: {signal['position_size_factor']:.2f}")
     else:
         print("  ❌ Failed to upload bias_signal.csv - SEE API ERROR ABOVE")
 
     print("\n" + "=" * 60)
-    print("✅ EXECUTION COMPLETED")
+    print("✅ EXECUTION COMPLETED (v2.3)")
+    print("🔧 Active: 2.0 strength decay threshold + 3.0 min strength")
     print("=" * 60)
 
 if __name__ == "__main__":
