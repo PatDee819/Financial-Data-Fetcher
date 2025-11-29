@@ -55,27 +55,37 @@ def normalize_value(value, min_val, max_val):
 def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
     """
     Fetch data and calculate momentum, volatility, RSI (for GOLD), and Volume Ratio (for GOLD).
-    """ # ⬅️ Updated documentation
+    ENHANCED: Better error handling for pandas Series formatting issues.
+    """
     for attempt in range(retries):
         try:
             hist_data = yf.download(ticker, period=period, interval=interval, progress=False)
             
             if hist_data.empty or len(hist_data) < 20:
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)
                 continue
 
-            current_price = hist_data["Close"].iloc[-1]
-            initial_price = hist_data["Close"].iloc[-15]
+            # 🔧 FIX: Force conversion to Python float to avoid Series formatting errors
+            try:
+                current_price = float(hist_data["Close"].iloc[-1])
+                initial_price = float(hist_data["Close"].iloc[-15])
+            except (TypeError, ValueError, IndexError) as e:
+                print(f"price conversion error: {e}")
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)
+                continue
             
             momentum = ((current_price - initial_price) / initial_price) * 100
             
             log_returns = np.log(hist_data['Close'] / hist_data['Close'].shift(1))
             daily_volatility = log_returns.std() * np.sqrt(252 * 13)
-            volatility = daily_volatility * 100
+            volatility = float(daily_volatility * 100)
 
             current_rsi = None
-            volume_ratio = 1.0 # ⬅️ Initialize Volume Ratio
+            volume_ratio = 1.0
 
-            if ticker == TICKERS["GOLD"] or ticker == "GLD":
+            if ticker == TICKERS["GOLD"] or ticker == "GLD" or ticker == "GDX":
                 # --- RSI Calculation ---
                 period_rsi = 14
                 delta = hist_data["Close"].diff()
@@ -85,22 +95,24 @@ def fetch_financial_data(ticker, period="5d", interval="30m", retries=3):
                 avg_loss = loss.ewm(com=period_rsi - 1, adjust=False).mean()
                 rs = avg_gain / avg_loss.replace(0, 1e-10) 
                 rsi_value = 100 - (100 / (1 + rs))
-                current_rsi = rsi_value.iloc[-1]
+                current_rsi = float(rsi_value.iloc[-1])
                 
-                # --- NEW: Volume Ratio Calculation for GOLD ---
+                # --- Volume Ratio Calculation for GOLD ---
                 if 'Volume' in hist_data.columns and not hist_data['Volume'].empty:
-                    current_volume = hist_data["Volume"].iloc[-1]
-                    avg_volume = hist_data["Volume"].mean()
-                    volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+                    try:
+                        current_volume = float(hist_data["Volume"].iloc[-1])
+                        avg_volume = float(hist_data["Volume"].mean())
+                        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+                    except (TypeError, ValueError):
+                        volume_ratio = 1.0
 
-            # 🛑 IMPORTANT: Now returns 5 values (including volume_ratio)
             return current_price, momentum, volatility, current_rsi, volume_ratio
             
         except Exception as e:
             print(f"⚠️ Attempt {attempt + 1} failed for {ticker}: {e}")
-            time.sleep(2 ** attempt)
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
             
-    # 🛑 IMPORTANT: Returns 5 None values on failure
     return None, None, None, None, None
 
 def calculate_composite_score(results):
@@ -254,7 +266,7 @@ def generate_predictive_bias(results, current_score):
     elif vix_mom < -1.0 and dxy_mom > 0.5: 
         boost1 = -3.0
 
-    initial_bias = (slope * slope_multiplier * 10) + boost1 # ⬅️ Renamed variable
+    initial_bias = (slope * slope_multiplier * 10) + boost1
     
     strength_threshold = 3.0
     
@@ -265,7 +277,7 @@ def generate_predictive_bias(results, current_score):
     else:
         action = "FLAT"
         
-    bias = initial_bias # ⬅️ Initialize final bias
+    bias = initial_bias
 
     # --- NEW: VOLUME CONFIRMATION (Phase 2, #7) ---
     volume_ratio = results.get("GOLD_VolumeRatio", 1.0)
@@ -278,7 +290,7 @@ def generate_predictive_bias(results, current_score):
         multiplier = 1.15
         print(f"  📊 Volume boost: {volume_ratio:.2f}x avg (bias enhanced by 15%)")
         
-    bias *= multiplier # ⬅️ Apply the volume multiplier to the bias
+    bias *= multiplier
     
     # 🛑 Re-evaluate action based on new, adjusted bias
     if action != "FLAT":
@@ -286,11 +298,9 @@ def generate_predictive_bias(results, current_score):
              print(f"  📉 Volume filter demoted signal to FLAT (Adjusted bias: {bias:+.1f})")
              action = "FLAT"
              bias = 0.0
-    # -----------------------------------------------
 
 
     # --- 🔧 V2.3 UPDATE: TIGHTENED SIGNAL INVALIDATION LOGIC ---
-    # NOTE: This check now operates on the volume-adjusted 'bias'
     invalidation_triggered = False
     
     if last_action in ["LONG", "SHORT"] and time_since_signal < 14400:  # Within last 4 hours
@@ -314,7 +324,7 @@ def generate_predictive_bias(results, current_score):
     rsi_threshold_short = 70
 
     filter_reason = None
-    if gold_rsi is not None and not invalidation_triggered:  # Don't apply RSI if already invalidated
+    if gold_rsi is not None and not invalidation_triggered:
         if action == "LONG" and gold_rsi > rsi_threshold_short:
             action = "FLAT"
             filter_reason = f"RSI filter hit: {gold_rsi:.1f} > {rsi_threshold_short}"
@@ -361,9 +371,8 @@ def generate_predictive_bias(results, current_score):
 def main():
     print("=" * 60)
     print("🚀 FINANCIAL DATA FETCHER - STARTED")
-    # ⬅️ Updated Version and Change Log
-    print("📌 VERSION: v2.4 - Time-of-Day and Volume Filters ADDED")
-    print("🔧 CHANGES: Time Filter (00-04, 21-23 UTC) | Volume Confirmation")
+    print("📌 VERSION: v2.5 - Enhanced GOLD Fallback & Error Handling")
+    print("🔧 CHANGES: Triple Fallback (GC=F→GLD→GDX) | Series Fix")
     print("=" * 60)
     
     if not GITHUB_TOKEN or GITHUB_TOKEN in ["YOUR_GITHUB_TOKEN_HERE", "YOUR_PERSONAL_ACCESS_TOKEN_HERE"]:
@@ -378,32 +387,41 @@ def main():
     print("\n📊 Fetching market data...")
     for key, ticker in TICKERS.items():
         print(f"  → {key} ({ticker})...", end=" ")
-        # 🛑 UPDATED CALL: Now expecting 5 return values
         current, mom, vol, rsi, volume_ratio = fetch_financial_data(ticker) 
         
+        # Enhanced VIX fallback
         if key == "VIX" and current is None:
             print("fallback to VXX...", end=" ")
-            # 🛑 UPDATED FALLBACK: Now expecting 5 return values
             current, mom, vol, rsi, volume_ratio = fetch_financial_data("VXX")
-        if key == "GOLD" and current is None:
-            print("fallback to GLD...", end=" ")
-            # 🛑 UPDATED FALLBACK: Now expecting 5 return values
-            current, mom, vol, rsi, volume_ratio = fetch_financial_data("GLD")
+        
+        # 🆕 ENHANCED: Triple fallback for GOLD
+        if key == "GOLD":
+            if current is None:
+                print("GC=F failed, trying GLD...", end=" ")
+                current, mom, vol, rsi, volume_ratio = fetch_financial_data("GLD")
+            
+            if current is None:
+                print("GLD failed, trying GDX...", end=" ")
+                current, mom, vol, rsi, volume_ratio = fetch_financial_data("GDX")
+            
+            if current is None:
+                print("❌ ALL GOLD TICKERS FAILED - CRITICAL ERROR")
+                # Continue to next ticker instead of breaking
+                continue
             
         if current is not None:
-            safe_current = current.item() if hasattr(current, 'item') else current
-            safe_mom = mom.item() if hasattr(mom, 'item') else mom
-            safe_vol = vol.item() if hasattr(vol, 'item') else vol
-            safe_rsi = rsi.item() if hasattr(rsi, 'item') else rsi if rsi is not None else None
-            # 🛑 NEW: Safely cast Volume Ratio
-            safe_volume_ratio = volume_ratio.item() if hasattr(volume_ratio, 'item') else volume_ratio
+            # 🔧 FIX: Force conversion to native Python float
+            safe_current = float(current)
+            safe_mom = float(mom)
+            safe_vol = float(vol)
+            safe_rsi = float(rsi) if rsi is not None else None
+            safe_volume_ratio = float(volume_ratio)
             
             results[f"{key}_Current"] = safe_current
             results[f"{key}_Momentum"] = safe_mom
             results[f"{key}_Volatility"] = safe_vol
             if safe_rsi is not None:
                 results[f"{key}_RSI"] = safe_rsi
-            # 🛑 NEW: Store Volume Ratio in results for GOLD (will be 1.0 for others)
             if key == "GOLD":
                  results[f"{key}_VolumeRatio"] = safe_volume_ratio 
                     
@@ -449,7 +467,6 @@ def main():
         'GOLD_Current': results.get('GOLD_Current'),
         'GOLD_Momentum': results.get('GOLD_Momentum'),
         'GOLD_Volatility': results.get('GOLD_Volatility'),
-        # 🛑 NEW: Add Volume Ratio to the scores log
         'GOLD_VolumeRatio': results.get('GOLD_VolumeRatio'), 
         'Composite_Score': composite
     }
@@ -464,12 +481,12 @@ def main():
     # ==============================
     # GENERATE bias_signal.csv
     # ==============================
-    print("\n🎯 Generating trading bias (v2.4 - Time/Volume Filters)...")
+    print("\n🎯 Generating trading bias (v2.5 - Enhanced Fallback)...")
     signal = generate_predictive_bias(results, composite)
     signal_df = pd.DataFrame([signal])
     bias_content = signal_df.to_csv(index=False)
     
-    success = upload_file_to_github("bias_signal.csv", bias_content, f"Signal Update v2.4 - {current_time_str}")
+    success = upload_file_to_github("bias_signal.csv", bias_content, f"Signal Update v2.5 - {current_time_str}")
     
     if success:
         print(f"  ✅ bias_signal.csv uploaded")
@@ -481,8 +498,8 @@ def main():
         print("  ❌ Failed to upload bias_signal.csv - SEE API ERROR ABOVE")
 
     print("\n" + "=" * 60)
-    print("✅ EXECUTION COMPLETED (v2.4)")
-    print("🔧 Active: Time Filter + Volume Confirmation")
+    print("✅ EXECUTION COMPLETED (v2.5)")
+    print("🔧 Active: Triple GOLD Fallback + Series Fix")
     print("=" * 60)
 
 if __name__ == "__main__":
