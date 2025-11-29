@@ -21,4 +21,3 @@ jobs:
       
       - name: Run ticker test
         run: python test_gold.py
-test_tickers.yml
