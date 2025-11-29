@@ -1,0 +1,33 @@
+name: Test Gold Tickers
+
+on:
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          pip install yfinance pandas numpy
+      
+      - name: Run ticker test
+        run: python test_gold.py
+```
+
+---
+
+### **4. Name the file**
+At the top, you'll see a filename field. It might say something like `main.yml` or `blank.yml`.
+
+**Change it to:**
+```
+test_tickers.yml
