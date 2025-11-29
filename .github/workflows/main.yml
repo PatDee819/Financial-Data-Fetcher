@@ -21,13 +21,4 @@ jobs:
       
       - name: Run ticker test
         run: python test_gold.py
-```
-
----
-
-### **4. Name the file**
-At the top, you'll see a filename field. It might say something like `main.yml` or `blank.yml`.
-
-**Change it to:**
-```
 test_tickers.yml
